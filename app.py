@@ -1,5 +1,6 @@
 import os
 import re
+from pathlib import Path
 
 import streamlit as st
 from deep_translator import MyMemoryTranslator
@@ -128,11 +129,17 @@ def translate_long_hi_to_en(text):
     # gives a confident wrong match rather than an error, so treat it as a miss.
     return None if looks_untranslated(english) else english
 
+# Generated speech is cached here rather than in the project root, where it
+# was dropping ~50 loose .mp3 files. Regenerated on demand, so it's disposable.
+AUDIO_DIR = Path(__file__).parent / "audio"
+
+
 # Give voice output in Hindi of the text
 def speak_hindi(text, filename):
-    tts = gTTS(text=text, lang="hi")
-    tts.save(filename)
-    st.audio(filename, autoplay=True)
+    AUDIO_DIR.mkdir(exist_ok=True)
+    path = AUDIO_DIR / filename
+    gTTS(text=text, lang="hi").save(str(path))
+    st.audio(str(path), autoplay=True)
 
 # Function to give voice output of a statement in hindi on pressing button
 def hindi_prompt_button(hindi_text, filename):

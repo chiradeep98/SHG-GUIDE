@@ -25,7 +25,10 @@ from streamlit.testing.v1 import AppTest
 sys.path.insert(0, ".")
 
 from data.day_questions import THIS_OR_THAT
-from data.questions import BESPOKE_QUESTIONS, CRITICAL, MODERATE, LOW
+from data.questions import (
+    BESPOKE_QUESTIONS, CRITICAL, LOW, MODERATE,
+    SLOT_QUESTIONS, SLOT_SCALES, UNIVERSAL_SLOTS,
+)
 from data.skills import SKILLS
 from logic.requirements import assess_skill, shortlist_alternatives
 
@@ -99,6 +102,47 @@ def stub_mic(answer_by_widget_key):
         return answer_by_widget_key[key]
 
     streamlit_mic_recorder.speech_to_text = fake
+
+
+# =============================================================== data integrity
+def test_data_integrity():
+    """
+    The catalogue and the question bank have to agree with each other. These
+    are the mistakes that are silent at runtime: a skill requiring a slot that
+    doesn't exist, or a `min` value that isn't on that slot's scale, would just
+    score wrongly rather than raise.
+    """
+    assert len(SKILLS) == 10
+
+    for skill in SKILLS:
+        for slot, rule in skill["requirements"].items():
+            assert slot in SLOT_QUESTIONS, f"{skill['id']} requires unknown slot {slot}"
+            assert slot in SLOT_SCALES, f"{slot} has no scale"
+            assert rule["min"] in SLOT_SCALES[slot], \
+                f"{skill['id']}.{slot} min={rule['min']} is not on that slot's scale"
+            assert rule["weight"] in (CRITICAL, MODERATE, LOW), f"{skill['id']}.{slot} odd weight"
+        for q in BESPOKE_QUESTIONS.get(skill["id"], []):
+            assert q["min"] in q["scale"], f"{q['id']} min is not on its own scale"
+            assert len(q["options"]) == len(q["scale"]), f"{q['id']} options/scale length mismatch"
+        assert skill.get("first_step_hindi"), f"{skill['id']} has no first step"
+
+    # Every option a slot offers must exist on its scale, or scoring silently
+    # treats a real answer as unknown. Order is allowed to differ: scales run
+    # worst -> best for index comparison, while some slots display best-first
+    # because that reads more naturally (market_distance offers "nearby" first).
+    # stage/mobility are collected but not scored, so they have no scale.
+    for slot, q in SLOT_QUESTIONS.items():
+        if q["type"] == "choice" and slot in SLOT_SCALES:
+            assert set(o["value"] for o in q["options"]) == set(SLOT_SCALES[slot]), \
+                f"{slot} options and scale describe different value sets"
+
+    bank = len(SLOT_QUESTIONS) + sum(len(v) for v in BESPOKE_QUESTIONS.values())
+    print(f"  {len(SKILLS)} skills, {len(SLOT_QUESTIONS)} slots + "
+          f"{bank - len(SLOT_QUESTIONS)} bespoke = {bank} questions, all consistent")
+
+    for skill in SKILLS:
+        asked = len(set(UNIVERSAL_SLOTS) | set(skill["requirements"])) + len(BESPOKE_QUESTIONS.get(skill["id"], []))
+        assert 10 <= asked <= 18, f"{skill['id']} would ask {asked} questions"
 
 
 # ===================================================================== engine
@@ -352,7 +396,10 @@ def test_translation_failure_degrades():
 if __name__ == "__main__":
     import logic.llm as llm
 
-    print("engine / requirement tiers")
+    print("data integrity")
+    test_data_integrity()
+
+    print("\nengine / requirement tiers")
     test_requirement_tiers()
 
     print("\nscenario 1 + question persistence")

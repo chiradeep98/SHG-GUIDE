@@ -1,8 +1,14 @@
 # API key - never commit
 .streamlit/secrets.toml
 
-# participant session logs
+# participant session logs - contains research data
 results/
+
+# generated speech, regenerated on demand
+audio/
+*.mp3
 
 __pycache__/
 *.pyc
+venv/
+.DS_Store

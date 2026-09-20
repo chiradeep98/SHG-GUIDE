@@ -1,7 +1,5 @@
 deep-translator
 streamlit
-fastapi
-uvicorn
 streamlit_mic_recorder
 gtts
 sentence_transformers
