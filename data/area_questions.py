@@ -14,7 +14,7 @@ AREA_QUESTIONS = [
         "field": "district_area",
         "type": "voice_open",
         "hindi_prompt": "आपका जिला या इलाका क्या है?",
-        "label_en": "Your district or local area",
+        "label_en": "Which is your district or local area",
     },
     {
         "id": "resources",
@@ -30,9 +30,9 @@ AREA_QUESTIONS = [
         "hindi_prompt": "आपके पास खरीदार या बाज़ार कितनी दूर है?",
         "label_en": "How close are buyers or a market to you?",
         "options": [
-            {"value": "nearby", "label_hi": "🏠 पास में"},
-            {"value": "moderate_distance", "label_hi": "🚶 मध्यम दूरी पर"},
-            {"value": "far", "label_hi": "🚗 दूर"},
+            {"value": "nearby", "label_hi": "🏠 पास में / nearby"},
+            {"value": "moderate_distance", "label_hi": "🚶 मध्यम दूरी पर / moderate_distance"},
+            {"value": "far", "label_hi": "🚗 दूर / far"},
         ],
     },
     {
@@ -42,9 +42,9 @@ AREA_QUESTIONS = [
         "hindi_prompt": "नज़दीकी शहर या परिवहन केंद्र कितनी दूर है?",
         "label_en": "How far is the nearest town or transport hub?",
         "options": [
-            {"value": "nearby", "label_hi": "🏠 पास में"},
-            {"value": "moderate_distance", "label_hi": "🚶 मध्यम दूरी पर"},
-            {"value": "far", "label_hi": "🚗 दूर"},
+            {"value": "nearby", "label_hi": "🏠 पास में / nearby"},
+            {"value": "moderate_distance", "label_hi": "🚶 मध्यम दूरी पर / moderate_distance"},
+            {"value": "far", "label_hi": "🚗 दूर / far"},
         ],
     },
     {
@@ -54,8 +54,8 @@ AREA_QUESTIONS = [
         "hindi_prompt": "क्या आपके पास बिजली और ठंडा भंडारण (कोल्ड स्टोरेज) उपलब्ध है?",
         "label_en": "Do you have reliable electricity and cold storage access?",
         "options": [
-            {"value": "yes", "label_hi": "✅ हां"},
-            {"value": "no", "label_hi": "❌ नहीं"},
+            {"value": "yes", "label_hi": "✅ हां / yes"},
+            {"value": "no", "label_hi": "❌ नहीं /no"},
         ],
     },
     {
@@ -65,8 +65,8 @@ AREA_QUESTIONS = [
         "hindi_prompt": "क्या यात्रा करना या सार्वजनिक रूप से दिखना आपके लिए मुश्किल है?",
         "label_en": "Is travel or being publicly visible difficult for you right now?",
         "options": [
-            {"value": "yes", "label_hi": "✅ हां"},
-            {"value": "no", "label_hi": "❌ नहीं"},
+            {"value": "yes", "label_hi": "✅ हां / yes"},
+            {"value": "no", "label_hi": "❌ नहीं / no"},
         ],
     },
     {
@@ -76,9 +76,9 @@ AREA_QUESTIONS = [
         "hindi_prompt": "क्या आपने अभी काम शुरू किया है, या अभी सिर्फ विचार है?",
         "label_en": "Have you started working on this, or is it still just an idea?",
         "options": [
-            {"value": "idea", "label_hi": "💡 अभी सिर्फ विचार है"},
-            {"value": "started", "label_hi": "🌱 शुरुआत कर दी है"},
-            {"value": "running", "label_hi": "🏃 पहले से चल रहा है"},
+            {"value": "idea", "label_hi": "💡 अभी सिर्फ विचार है / idea"},
+            {"value": "started", "label_hi": "🌱 शुरुआत कर दी है / started"},
+            {"value": "running", "label_hi": "🏃 पहले से चल रहा है / running"},
         ],
     },
 ]

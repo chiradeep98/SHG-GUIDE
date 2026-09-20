@@ -25,8 +25,8 @@ SKILL_ANCHORS = {
 }
 
 # Precompute anchor embeddings once too — same reasoning as the shared model.
-_anchor_ids = list(SKILL_ANCHORS.keys())
-_anchor_embeddings = embed(list(SKILL_ANCHORS.values()))
+_anchor_ids = list(SKILL_ANCHORS.keys()) # Stores the ids of all the skills in a list
+_anchor_embeddings = embed(list(SKILL_ANCHORS.values())) # Generate embeddings of all the anchor values of the skills.
 
 _skills_by_id = {s["id"]: s for s in SKILLS}
 
@@ -34,13 +34,14 @@ KEYWORD_BOOST_PER_HIT = 0.15
 KEYWORD_BOOST_CAP = 0.4
 
 
-def match_skill(description_text):
+def match_skill(description_text): # description_text -> The translated english text input of the user
     """
     Returns a list of (skill_id, confidence_0_to_1) tuples, sorted
     best match first. Pure semantic similarity, no keyword boost.
     """
-    query_embedding = embed(description_text)
-    scores = cosine_sim(query_embedding, _anchor_embeddings)[0]
+    query_embedding = embed(description_text) # Generating embedding vectors of the input text from the user
+    scores = cosine_sim(query_embedding, _anchor_embeddings)[0] # Computes cosine simillarity between 
+                                                                # the input text and the anchor
 
     results = list(zip(_anchor_ids, scores.tolist()))
     results.sort(key=lambda pair: pair[1], reverse=True)
@@ -48,7 +49,7 @@ def match_skill(description_text):
     return results
 
 
-def match_skill_combined(description_text):
+def match_skill_combined(description_text): # description_text -> The translated english text input of the user
     """
     Same semantic match as match_skill(), boosted when her description
     directly names a resource tied to a skill (e.g. "I have 5 cows"
@@ -60,7 +61,7 @@ def match_skill_combined(description_text):
 
     boosted = []
     for skill_id, score in base_results:
-        keywords = _skills_by_id[skill_id]["feasibility_profile"]["resource_keywords"]
+        keywords = _skills_by_id[skill_id]["resource_keywords"]
         hits = sum(1 for kw in keywords if kw in text_lower)
         boost = min(hits * KEYWORD_BOOST_PER_HIT, KEYWORD_BOOST_CAP)
         boosted.append((skill_id, min(1.0, score + boost)))

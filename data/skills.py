@@ -1,3 +1,21 @@
+"""
+SKILL CATALOGUE
+
+`supply_chain` and `environmental` are reference content, transcribed from
+data/skill_supply_chain_data.md — they're what the roadmap reads out.
+
+`resource_keywords` feeds the keyword boost in logic/skill_matching.py.
+
+`requirements` is what logic/requirements.py scores against: each entry is
+a slot from data/questions.py, the minimum answer that counts as met, and
+a weight. Weight 3 can block the skill outright, 2 is important, 1 is a
+nice-to-have. Thresholds are taken from the reference doc — mushroom's
+200-300 sq ft becomes covered_space: one_room, weaving's "one loom
+supports three more people" becomes helpers_available: three_plus, and so on.
+"""
+
+from data.questions import CRITICAL, MODERATE, LOW
+
 SKILLS = [
     {
         "id": "handcraft",
@@ -13,12 +31,14 @@ SKILLS = [
             "summary": "Materials like wood, clay, fabric or bamboo are usually available locally or from craft wholesalers, and a beginner setup can start under ₹75,000, with most of your margin coming from your own skilled labour.",
         },
         "environmental": "Demand often peaks around festival seasons. Worth checking how many other women nearby already make similar items before settling on one design.",
-        "feasibility_profile": {
-            "resource_keywords": ["wood", "clay", "fabric", "metal", "glass", "bamboo", "fiber", "craft", "carving", "pottery", "bead", "thread"],
-            "perishability": "low",
-            "cold_chain_dependent": False,
-            "demand_pattern": "festival_spiking",
-            "collaborative": False,
+        "resource_keywords": ["wood", "clay", "fabric", "metal", "glass", "bamboo", "fiber", "craft", "carving", "pottery", "bead", "thread"],
+        "first_step_hindi": "इस हफ़्ते अपनी सबसे अच्छी दो चीज़ें बनाइए और किसी त्योहार वाले बाज़ार में दाम पूछ कर आइए।",
+        "requirements": {
+            "craft_materials": {"min": "some", "weight": CRITICAL},
+            "market_distance": {"min": "moderate", "weight": MODERATE},
+            "daily_hours": {"min": "2_to_4", "weight": MODERATE},
+            "capital_available": {"min": "under_25k", "weight": LOW},
+            "covered_space": {"min": "small_corner", "weight": LOW},
         },
     },
     {
@@ -35,12 +55,14 @@ SKILLS = [
             "summary": "Raw produce is seasonal and often locally available, and a home-based setup can start around ₹20,000 to ₹50,000, with properly processed pickles keeping for 12 to 24 months so you can sell steadily through the year.",
         },
         "environmental": "Hot, dry weather generally helps preservation. Monsoon months need extra care with storage and drying time.",
-        "feasibility_profile": {
-            "resource_keywords": ["mango", "vegetable", "fruit", "spice", "pickle", "preserve", "jar", "produce"],
-            "perishability": "low",
-            "cold_chain_dependent": False,
-            "demand_pattern": "seasonal",
-            "collaborative": False,
+        "resource_keywords": ["mango", "vegetable", "fruit", "spice", "pickle", "preserve", "jar", "produce"],
+        "first_step_hindi": "इस हफ़्ते चार छोटे डिब्बे अचार बनाइए और दो पड़ोसियों को दाम लगाकर देकर देखिए।",
+        "requirements": {
+            "seasonal_produce": {"min": "some", "weight": CRITICAL},
+            "covered_space": {"min": "small_corner", "weight": MODERATE},
+            "capital_available": {"min": "under_25k", "weight": LOW},
+            "daily_hours": {"min": "2_to_4", "weight": LOW},
+            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -57,12 +79,15 @@ SKILLS = [
             "summary": "Fabric, thread and trims are widely available locally, and a single sewing machine setup can start around ₹30,000 to ₹60,000, with fairly steady demand all year and spikes around festivals and weddings.",
         },
         "environmental": "Demand is fairly steady year-round, with spikes around festivals and the wedding season.",
-        "feasibility_profile": {
-            "resource_keywords": ["fabric", "cloth", "sew", "stitch", "tailor", "thread", "garment", "needle", "machine"],
-            "perishability": "none",
-            "cold_chain_dependent": False,
-            "demand_pattern": "steady",
-            "collaborative": False,
+        "resource_keywords": ["fabric", "cloth", "sew", "stitch", "tailor", "thread", "garment", "needle", "machine"],
+        "first_step_hindi": "इस हफ़्ते दो पड़ोसियों के कपड़े सिलकर या ठीक करके पैसे लेकर देखिए, और हिसाब लिख लीजिए।",
+        "requirements": {
+            "cloth_market": {"min": "some", "weight": CRITICAL},
+            "capital_available": {"min": "25k_75k", "weight": MODERATE},
+            "covered_space": {"min": "small_corner", "weight": MODERATE},
+            "electricity_reliability": {"min": "few_hours", "weight": MODERATE},
+            "market_distance": {"min": "moderate", "weight": MODERATE},
+            "daily_hours": {"min": "2_to_4", "weight": LOW},
         },
     },
     {
@@ -79,12 +104,17 @@ SKILLS = [
             "summary": "Milk is your main ongoing cost, so sourcing it directly from local farmers or a dairy cooperative and having reliable cold storage matters more than anything else for this business.",
         },
         "environmental": "Summer heat raises spoilage risk. Monsoon can affect milk supply consistency from local livestock.",
-        "feasibility_profile": {
-            "resource_keywords": ["cow", "buffalo", "milk", "dairy", "cattle", "livestock", "paneer", "ghee", "curd"],
-            "perishability": "high",
-            "cold_chain_dependent": True,
-            "demand_pattern": "steady",
-            "collaborative": False,
+        "resource_keywords": ["cow", "buffalo", "milk", "dairy", "cattle", "livestock", "paneer", "ghee", "curd"],
+        "first_step_hindi": "इस हफ़्ते एक दिन का दूध पनीर बनाकर दो घरों में बेचकर देखिए, और लागत का हिसाब रखिए।",
+        "requirements": {
+            "livestock_milk": {"min": "some", "weight": CRITICAL},
+            "cold_storage": {"min": "yes", "weight": CRITICAL},
+            "capital_available": {"min": "25k_75k", "weight": MODERATE},
+            "water_access": {"min": "yes", "weight": MODERATE},
+            "electricity_reliability": {"min": "mostly_reliable", "weight": MODERATE},
+            "daily_hours": {"min": "4_to_8", "weight": MODERATE},
+            "market_distance": {"min": "moderate", "weight": MODERATE},
+            "helpers_available": {"min": "one_or_two", "weight": LOW},
         },
     },
     {
@@ -101,12 +131,15 @@ SKILLS = [
             "summary": "Yarn is the main input and usually needs to be sourced carefully, and handloom weaving works best as a shared activity with others rather than alone, since pre-loom preparation typically needs extra hands.",
         },
         "environmental": "Humidity can affect yarn quality during production. Many regions have loom clusters worth connecting with.",
-        "feasibility_profile": {
-            "resource_keywords": ["yarn", "loom", "weav", "handloom", "cotton", "cloth", "fabric", "thread"],
-            "perishability": "none",
-            "cold_chain_dependent": False,
-            "demand_pattern": "steady",
-            "collaborative": True,
+        "resource_keywords": ["yarn", "loom", "weav", "handloom", "cotton", "cloth", "fabric", "thread"],
+        "first_step_hindi": "इस हफ़्ते अपने आसपास पता कीजिए कि ताना-बाना का काम कौन करता है, और धागे का दाम पूछिए।",
+        "requirements": {
+            "yarn_weavers": {"min": "some", "weight": CRITICAL},
+            "helpers_available": {"min": "three_plus", "weight": MODERATE},
+            "covered_space": {"min": "one_room", "weight": MODERATE},
+            "daily_hours": {"min": "4_to_8", "weight": MODERATE},
+            "capital_available": {"min": "under_25k", "weight": LOW},
+            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -123,12 +156,15 @@ SKILLS = [
             "summary": "There's no raw material to buy since the bees forage naturally, but you do need proximity to flowering plants and water, and the upfront cost of hives and equipment is higher than most other options here.",
         },
         "environmental": "Production is seasonal, tied to local flowering cycles. Meaningfully higher upfront cost than most other skills in this set.",
-        "feasibility_profile": {
-            "resource_keywords": ["bee", "honey", "hive", "flower", "apiary", "beekeeping", "colony"],
-            "perishability": "low",
-            "cold_chain_dependent": False,
-            "demand_pattern": "seasonal",
-            "collaborative": False,
+        "resource_keywords": ["bee", "honey", "hive", "flower", "apiary", "beekeeping", "colony"],
+        "first_step_hindi": "इस हफ़्ते नज़दीकी कृषि केंद्र जाकर मधुमक्खी पालन के प्रशिक्षण के बारे में पूछिए।",
+        "requirements": {
+            "flowering_land": {"min": "some", "weight": CRITICAL},
+            "water_access": {"min": "yes", "weight": CRITICAL},
+            "training_access": {"min": "yes", "weight": MODERATE},
+            "capital_available": {"min": "25k_75k", "weight": MODERATE},
+            "daily_hours": {"min": "under_2", "weight": LOW},
+            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -145,12 +181,17 @@ SKILLS = [
             "summary": "Feed is by far your biggest ongoing cost, and hardy indigenous breeds suited to free-range rearing work best at this scale, though disease and biosecurity need constant attention.",
         },
         "environmental": "Disease and biosecurity is the single biggest threat — one outbreak can wipe out an entire batch. Hardy indigenous breeds (Kadaknath, Vanaraja, Gramapriya) suit low-input rural systems best.",
-        "feasibility_profile": {
-            "resource_keywords": ["chicken", "poultry", "hen", "egg", "bird", "kadaknath", "vanaraja", "gramapriya"],
-            "perishability": "medium",
-            "cold_chain_dependent": False,
-            "demand_pattern": "steady",
-            "collaborative": False,
+        "resource_keywords": ["chicken", "poultry", "hen", "egg", "bird", "kadaknath", "vanaraja", "gramapriya"],
+        "first_step_hindi": "इस हफ़्ते पांच-दस चूज़े लेकर शुरू कीजिए, और टीकाकरण के बारे में पशु चिकित्सक से पूछिए।",
+        "requirements": {
+            "covered_space": {"min": "small_corner", "weight": CRITICAL},
+            "livestock_birds": {"min": "some", "weight": MODERATE},
+            "capital_available": {"min": "25k_75k", "weight": MODERATE},
+            "training_access": {"min": "yes", "weight": MODERATE},
+            "water_access": {"min": "yes", "weight": MODERATE},
+            "daily_hours": {"min": "2_to_4", "weight": MODERATE},
+            "market_distance": {"min": "moderate", "weight": MODERATE},
+            "helpers_available": {"min": "one_or_two", "weight": LOW},
         },
     },
     {
@@ -167,12 +208,17 @@ SKILLS = [
             "summary": "This is the cheapest of all ten skills to start, needs very little space, and produces a harvest in just 20 to 45 days — but fresh mushrooms spoil within days, so you'll need a buyer lined up or a plan to dry them before harvest.",
         },
         "environmental": "Fresh mushrooms spoil within just a few days — a buyer must be secured before harvest, or the product needs to be dried. Best beginner variety is oyster mushroom, tolerant of ambient humidity in many regions.",
-        "feasibility_profile": {
-            "resource_keywords": ["mushroom", "spawn", "straw", "sawdust", "agricultural waste", "paddy", "wheat"],
-            "perishability": "very_high",
-            "cold_chain_dependent": False,
-            "demand_pattern": "fast_cycle",
-            "collaborative": False,
+        "resource_keywords": ["mushroom", "spawn", "straw", "sawdust", "agricultural waste", "paddy", "wheat"],
+        "first_step_hindi": "इस हफ़्ते नज़दीकी कृषि विज्ञान केंद्र से स्पॉन का दाम पूछिए, और एक खरीदार से बात कर लीजिए।",
+        "requirements": {
+            "farm_waste": {"min": "some", "weight": CRITICAL},
+            "covered_space": {"min": "one_room", "weight": CRITICAL},
+            "market_distance": {"min": "moderate", "weight": MODERATE},
+            "water_access": {"min": "seasonal", "weight": MODERATE},
+            "capital_available": {"min": "under_25k", "weight": LOW},
+            "electricity_reliability": {"min": "few_hours", "weight": LOW},
+            "training_access": {"min": "yes", "weight": LOW},
+            "daily_hours": {"min": "2_to_4", "weight": LOW},
         },
     },
     {
@@ -189,12 +235,15 @@ SKILLS = [
             "summary": "Oils and lye, or a simpler melt-and-pour base for beginners, are the main inputs, and this is the most naturally suited of all ten skills to selling through Instagram or WhatsApp.",
         },
         "environmental": "Among the lowest-equipment-cost options in the set, with a clear safe-beginner path (melt-and-pour) built into the trade itself.",
-        "feasibility_profile": {
-            "resource_keywords": ["oil", "fat", "lye", "soap", "saponification"],
-            "perishability": "low",
-            "cold_chain_dependent": False,
-            "demand_pattern": "steady",
-            "collaborative": False,
+        "resource_keywords": ["oil", "fat", "lye", "soap", "saponification"],
+        "first_step_hindi": "इस हफ़्ते तैयार बेस से दस साबुन बनाइए और व्हाट्सएप पर अपने जानने वालों को दिखाइए।",
+        "requirements": {
+            "cooking_oils": {"min": "some", "weight": CRITICAL},
+            "covered_space": {"min": "small_corner", "weight": MODERATE},
+            "capital_available": {"min": "under_25k", "weight": LOW},
+            "electricity_reliability": {"min": "few_hours", "weight": LOW},
+            "daily_hours": {"min": "under_2", "weight": LOW},
+            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -211,12 +260,14 @@ SKILLS = [
             "summary": "Bamboo sticks, charcoal and fragrance oils are the main inputs, and you can start by rolling by hand and later add a rolling machine as you grow, with steady year-round demand and festival spikes.",
         },
         "environmental": "Steady, high year-round baseline demand (daily religious/household use) with sharp additional spikes around festivals. India produces over 85% of the world's incense sticks.",
-        "feasibility_profile": {
-            "resource_keywords": ["bamboo", "incense", "agarbatti", "charcoal", "jigat", "fragrance", "essential oil"],
-            "perishability": "low",
-            "cold_chain_dependent": False,
-            "demand_pattern": "steady",
-            "collaborative": False,
+        "resource_keywords": ["bamboo", "incense", "agarbatti", "charcoal", "jigat", "fragrance", "essential oil"],
+        "first_step_hindi": "इस हफ़्ते बांस की तीलियों और सुगंध तेल का दाम पता कीजिए, और हाथ से थोड़ी अगरबत्ती बनाकर देखिए।",
+        "requirements": {
+            "bamboo_access": {"min": "some", "weight": CRITICAL},
+            "capital_available": {"min": "25k_75k", "weight": MODERATE},
+            "covered_space": {"min": "small_corner", "weight": MODERATE},
+            "daily_hours": {"min": "2_to_4", "weight": MODERATE},
+            "market_distance": {"min": "moderate", "weight": LOW},
         },
     },
 ]

@@ -1,0 +1,8 @@
+# API key - never commit
+.streamlit/secrets.toml
+
+# participant session logs
+results/
+
+__pycache__/
+*.pyc
