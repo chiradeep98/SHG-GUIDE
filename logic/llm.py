@@ -6,6 +6,11 @@ turns that narration into (a) the capabilities she demonstrated, (b) candidate
 skills from our catalogue, and (c) a short spoken reflection in Hindi that
 names her competence back to her using her own words.
 
+Translation is deliberately not done here. Hindi <-> English goes through
+MyMemory in app.py: it is free, needs no key, and keeps the app working for
+anyone running it without OpenRouter credit. This module is reserved for the
+one job that actually needs a language model.
+
 Why an LLM here and nowhere else in the app: her day arrives as rambling,
 unpunctuated, dialect-inflected Hindi speech. Sentence-embedding similarity
 against fixed anchors cannot reliably tell "मैं भैंस का दूध निकालती हूं और
@@ -29,6 +34,7 @@ Three safety properties:
 """
 import json
 import logging
+import re
 from typing import List, Optional
 
 from openai import OpenAI
@@ -89,7 +95,7 @@ Your job has three parts.
 
 Also write `first_step_hindi`: one small, concrete thing she could genuinely try within about a week, using only what she already has.
 
-The first step MUST involve at least one person outside her own household, and MUST have a visible outcome — a price named, an item offered or sold, an order taken, a supplier asked for a rate. "Make four extra jars and offer them to two neighbours at forty rupees" is right. Mending her own family's clothes, cooking for her own household, or tidying her own work is WRONG: those are chores she already does, and they prove nothing new to her. Do not write "make a plan", "do research", or "think about it". One or two sentences, addressed as "आप".
+The first step MUST involve at least one person outside her own household, and MUST have a visible outcome — a price named, an item offered or sold, an order taken, a supplier asked for a rate. "Make four extra jars and offer them to two neighbours at forty rupees" is right. Mending her own family's clothes, cooking for her own household, or tidying her own work is WRONG: those are chores she already does, and they prove nothing new to her. Do not write "make a plan", "do research", or "think about it". One or two sentences, addressed as "आप". Also give the same step in English as `first_step_english`, for anyone reading alongside her.
 
 Tone throughout: talking to a capable adult who has been undervaluing ordinary work. Plain, warm, specific, never condescending, never inflated.
 
@@ -105,6 +111,7 @@ class SkillReading(BaseModel):
     mirror_hindi: str
     mirror_english: str
     first_step_hindi: str
+    first_step_english: str
 
 
 def looks_untranslated(text: str, threshold: float = 0.2) -> bool:
@@ -140,6 +147,40 @@ def _client(api_key: Optional[str]) -> OpenAI:
     return OpenAI(base_url=BASE_URL, api_key=api_key)
 
 
+def _affordable_tokens(exc) -> Optional[int]:
+    """
+    OpenRouter reserves credit against max_tokens rather than actual usage, so
+    a low balance returns a 402 even when the real response would cost a
+    fraction of the reservation. The error states the affordable ceiling, so
+    read it back rather than guessing at a smaller number.
+    """
+    match = re.search(r"can only afford (\d+)", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _complete(api_key, **kwargs):
+    """
+    One chat completion, retried once at a smaller ceiling if the balance
+    cannot cover the requested one. The retry is strictly cheaper than the
+    original request, so it can't overspend.
+    """
+    client = _client(api_key)
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        affordable = _affordable_tokens(exc)
+        if not affordable or affordable >= kwargs.get("max_tokens", 0):
+            raise
+        # leave a little headroom below the stated ceiling
+        retry_at = max(256, affordable - 64)
+        log.warning(
+            "Balance too low for max_tokens=%s; retrying at %s. "
+            "A long answer may be truncated — add credit to avoid this.",
+            kwargs.get("max_tokens"), retry_at,
+        )
+        return client.chat.completions.create(**{**kwargs, "max_tokens": retry_at})
+
+
 def _strict_schema(model: type[BaseModel]) -> dict:
     """
     OpenRouter's strict json_schema mode requires additionalProperties: false on
@@ -159,43 +200,6 @@ def _strict_schema(model: type[BaseModel]) -> dict:
 
     close(schema)
     return schema
-
-
-_TRANSLATE_SYSTEM = (
-    "Translate the user's Hindi into plain English. It is transcribed rural speech: "
-    "often unpunctuated, sometimes dialect, sometimes mid-thought. Translate the meaning, "
-    "not word-for-word. Reply with the English translation and nothing else — no preamble, "
-    "no notes, no quotation marks. If it is already English, return it unchanged."
-)
-
-
-def translate_to_english(hindi_text: str, api_key: Optional[str] = None) -> Optional[str]:
-    """
-    Hindi -> English for her voice answers. Returns None on any failure so the
-    caller can fall back to MyMemory.
-    """
-    if not hindi_text.strip():
-        return None
-
-    try:
-        response = _client(api_key).chat.completions.create(
-            model=MODEL,
-            max_tokens=2000,
-            messages=[
-                {"role": "system", "content": _TRANSLATE_SYSTEM},
-                {"role": "user", "content": hindi_text},
-            ],
-        )
-    except Exception as exc:
-        log.warning("Translation failed (%s): %s", type(exc).__name__, exc)
-        return None
-
-    text = (response.choices[0].message.content or "").strip()
-    if not text:
-        log.warning("Translation returned empty content")
-        return None
-    # The model can echo the Hindi back too, same as MyMemory does.
-    return None if looks_untranslated(text) else text
 
 
 def _catalogue_text(skills):
@@ -229,7 +233,8 @@ def read_her_day(
     )
 
     try:
-        response = _client(api_key).chat.completions.create(
+        response = _complete(
+            api_key,
             model=MODEL,
             # Devanagari costs 2-3 tokens per character on most tokenizers, so
             # this needs headroom — a free model truncated mid-string at 4000.

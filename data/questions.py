@@ -525,3 +525,62 @@ def short_label_for(key, skill_id=None):
     if question and question.get("short_label"):
         return question["short_label"]
     return SHORT_LABELS.get(key) or label_for(key, skill_id)
+
+# The same short labels in Hindi. The breakdown screens name a requirement over
+# and over — in the summary sentence, in the blocking list, in the remedy card —
+# and she reads the Hindi line first, so every one of these needs a Hindi form
+# rather than an English label with a Hindi caption underneath.
+SHORT_LABELS_HI = {
+    "state": "आपका राज्य",
+    "district_area": "आपका ज़िला",
+    "stage": "आप कहाँ तक पहुँची हैं",
+    "capital_available": "शुरू करने के पैसे",
+    "daily_hours": "हर दिन का समय",
+    "mobility_restricted": "आने-जाने की आज़ादी",
+    "market_distance": "बाज़ार की दूरी",
+    "transport_distance": "आने-जाने के साधन की दूरी",
+    "covered_space": "ढकी हुई जगह",
+    "electricity_reliability": "भरोसे की बिजली",
+    "cold_storage": "ठंडा रखने की सुविधा",
+    "water_access": "साफ़ पानी",
+    "helpers_available": "मदद करने वाले लोग",
+    "training_access": "प्रशिक्षण मिल पाना",
+    "livestock_milk": "दूध देने वाले जानवर या दूध",
+    "livestock_birds": "मुर्गियाँ या उनके लिए जगह",
+    "farm_waste": "पुआल या खेत का कचरा",
+    "flowering_land": "पास में फूलों वाली ज़मीन",
+    "bamboo_access": "बांस की उपलब्धता",
+    "cloth_market": "पहुँच में कपड़े का बाज़ार",
+    "yarn_weavers": "सूत या पास के बुनकर",
+    "seasonal_produce": "मौसमी फल-सब्ज़ी",
+    "craft_materials": "शिल्प का कच्चा माल",
+    "cooking_oils": "सस्ता खाने का तेल",
+    "handcraft_distinctive_design": "अपना अलग डिज़ाइन",
+    "pickle_bulk_buy": "मौसम में थोक में फल खरीदना",
+    "pickle_drying_space": "धूप में सुखाने की जगह",
+    "pickle_fssai_aware": "FSSAI रजिस्ट्रेशन की जानकारी",
+    "tailoring_has_machine": "सिलाई मशीन",
+    "tailoring_skill_level": "पूरे कपड़े सिल पाना",
+    "dairy_litres_per_day": "हर दिन पर्याप्त दूध",
+    "dairy_collection_centre": "पास में दूध संग्रह केंद्र",
+    "dairy_makes_products": "पनीर या घी पहले से बनाना",
+    "weaving_has_loom": "चालू करघा",
+    "weaving_preloom_help": "ताना और बोबिन के काम में मदद",
+    "weaving_experience": "बुनाई का अनुभव",
+    "beekeeping_handled_bees": "मधुमक्खियों का अनुभव",
+    "beekeeping_year_round_flowering": "साल भर फूल",
+    "beekeeping_others_nearby": "पास में दूसरे मधुमक्खी पालक",
+    "poultry_reared_before": "मुर्गी पालन का अनुभव",
+    "poultry_vaccination_knowledge": "टीका और सफ़ाई की जानकारी",
+    "poultry_contract_company": "पास में कॉन्ट्रैक्ट खेती कंपनी",
+    "mushroom_buyer_in_days": "दो-तीन दिन में खरीदार",
+    "mushroom_can_dry": "सुखा पाना",
+    "mushroom_spawn_supplier": "पास में बीज (स्पॉन) देने वाला",
+    "soap_digital_selling": "बेचने के लिए फ़ोन",
+    "agarbatti_fragrance_supplier": "खुशबू का तेल देने वाला",
+}
+
+
+def short_label_hi_for(slot, skill_id=None):
+    """Hindi counterpart of short_label_for(). Falls back to the English one."""
+    return SHORT_LABELS_HI.get(slot) or short_label_for(slot, skill_id)

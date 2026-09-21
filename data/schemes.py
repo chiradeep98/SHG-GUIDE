@@ -1,6 +1,18 @@
+# Government schemes, one application portal each.
+#
+# `url` is the page where she actually applies, not a news article about the
+# scheme — a remedy that names a scheme without saying where to go leaves her
+# exactly where she started.
+#
+# All URLs were checked with a request. These four could not be reached from
+# the development machine (the hosts refuse connections from outside India, or
+# were down at the time) and are recorded from their official listings, so they
+# are worth re-checking on a connection in India before a field trial:
+#   handicrafts.nic.in, kviconline.gov.in, aajeevika.gov.in, kvk.icar.gov.in
 SCHEMES = [
     {
         "id": "nhdp",
+        "url": "https://handicrafts.nic.in/",
         "name": "National Handicraft Development Programme",
         "craftCategories": ["Craft"],
         "states": ["national"],
@@ -13,6 +25,7 @@ SCHEMES = [
     },
     {
         "id": "odop",
+        "url": "https://pmfme.mofpi.gov.in/",
         "name": "State ODOP Scheme",
         "craftCategories": ["all"],
         "states": ["Bihar", "Odisha", "Rajasthan", "Uttar Pradesh"],
@@ -25,6 +38,7 @@ SCHEMES = [
     },
     {
         "id": "pmegp",
+        "url": "https://www.kviconline.gov.in/pmegpeportal/pmegphome/index.jsp",
         "name": "PMEGP",
         "craftCategories": ["all"],
         "states": ["national"],
@@ -37,6 +51,7 @@ SCHEMES = [
     },
     {
         "id": "nrlm",
+        "url": "https://aajeevika.gov.in/",
         "name": "DAY-NRLM SHG Interest Subvention",
         "craftCategories": ["all"],
         "states": ["national"],
@@ -49,6 +64,7 @@ SCHEMES = [
     },
     {
         "id": "standup",
+        "url": "https://www.standupmitra.in/",
         "name": "Stand-Up India",
         "craftCategories": ["all"],
         "states": ["national"],
@@ -61,6 +77,7 @@ SCHEMES = [
     },
     {
         "id": "mudra",
+        "url": "https://www.mudra.org.in/",
         "name": "Mudra Yojana (Shishu)",
         "craftCategories": ["all"],
         "states": ["national"],
@@ -73,6 +90,7 @@ SCHEMES = [
     },
     {
         "id": "rmk",
+        "url": "https://www.myscheme.gov.in/search",
         "name": "Rashtriya Mahila Kosh",
         "craftCategories": ["all"],
         "states": ["national"],
@@ -85,8 +103,9 @@ SCHEMES = [
     },
     {
         "id": "textile-cluster",
+        "url": "https://handlooms.nic.in/",
         "name": "Textile & Handloom Cluster Development",
-        "craftCategories": ["Textile"],
+        "craftCategories": ["Textile", "Handloom"],
         "states": ["national"],
         "stages": ["started", "running"],
         "type": ["Grant"],
@@ -97,6 +116,7 @@ SCHEMES = [
     },
     {
         "id": "pm-fme",
+        "url": "https://pmfme.mofpi.gov.in/",
         "name": "PM-FME (Formalisation of Micro Food Processing Enterprises)",
         "craftCategories": ["Food Preservation"],
         "states": ["national"],
@@ -109,6 +129,7 @@ SCHEMES = [
     },
     {
         "id": "pmksy-dairy",
+        "url": "https://dahd.gov.in/",
         "name": "PM Kisan Sampada Yojana",
         "craftCategories": ["Dairy"],
         "states": ["national"],
@@ -121,6 +142,7 @@ SCHEMES = [
     },
     {
         "id": "beekeeping-mission",
+        "url": "https://nbb.gov.in/",
         "name": "National Beekeeping and Honey Mission",
         "craftCategories": ["Apiculture"],
         "states": ["national"],
@@ -133,6 +155,7 @@ SCHEMES = [
     },
     {
         "id": "livestock-mission-poultry",
+        "url": "https://nlm.udyamimitra.in/",
         "name": "National Livestock Mission",
         "craftCategories": ["Poultry"],
         "states": ["national"],
@@ -145,6 +168,7 @@ SCHEMES = [
     },
     {
         "id": "mushroom-subsidy",
+        "url": "https://midh.gov.in/",
         "name": "NABARD / State Horticulture Mushroom Subsidy",
         "craftCategories": ["Horticulture"],
         "states": ["national"],
@@ -154,5 +178,165 @@ SCHEMES = [
         "benefit": 4,
         "processingTime": 2,
         "description": "Subsidy of up to 50% for mushroom cultivation units from NABARD and state horticulture departments."
-    }
+    },
+    {
+        "id": "pm-vishwakarma",
+        "url": "https://pmvishwakarma.gov.in/",
+        "name": "PM Vishwakarma",
+        # Eligibility is by trade, not by sector: the scheme lists 18 traditional
+        # trades (tailor, potter, basket/mat/broom weaver, doll and toy maker,
+        # cobbler, blacksmith and so on). Incense rolling and soap making are not
+        # among them, so "Manufacturing" and "Cosmetic" must not match here.
+        "craftCategories": ["Craft", "Textile"],
+        "states": ["national"],
+        "stages": ["idea", "started", "running"],
+        "type": ["Mixed"],
+        "ease": 4,
+        "benefit": 5,
+        "processingTime": 3,
+        "description": "For artisans in one of the 18 listed traditional trades, such as tailoring, pottery and basket or mat weaving: free skill training with a daily stipend, a Rs 15,000 toolkit grant, and collateral-free credit from Rs 1 lakh at 5% interest."
+    },
+    {
+        "id": "samarth-textiles",
+        "url": "https://samarth-textiles.gov.in/",
+        "name": "Samarth (Textile Skilling)",
+        "craftCategories": ["Textile", "Handloom"],
+        "states": ["national"],
+        "stages": ["idea", "started"],
+        "type": ["Grant"],
+        "ease": 4,
+        "benefit": 3,
+        "processingTime": 2,
+        "description": "Free skill training in stitching and garment work, with placement or self-employment support afterwards."
+    },
+    {
+        "id": "nabard-deds",
+        "url": "https://www.nabard.org/",
+        "name": "NABARD Dairy Support",
+        "craftCategories": ["Dairy"],
+        "states": ["national"],
+        "stages": ["idea", "started"],
+        "type": ["Mixed"],
+        "ease": 3,
+        "benefit": 4,
+        "processingTime": 3,
+        "description": "Capital support through a bank for milch animals, milk handling equipment and cold storage at small scale."
+    },
+    {
+        "id": "handloom-raw-material",
+        "url": "https://handlooms.nic.in/",
+        "name": "Handloom Raw Material Supply Scheme",
+        "craftCategories": ["Handloom"],
+        "states": ["national"],
+        "stages": ["started", "running"],
+        "type": ["Grant"],
+        "ease": 3,
+        "benefit": 4,
+        "processingTime": 3,
+        "description": "Supplies yarn to handloom weavers at subsidised rates, with freight reimbursed."
+    },
+    {
+        "id": "udyam",
+        "url": "https://udyamregistration.gov.in/",
+        "name": "Udyam Registration",
+        "craftCategories": ["all"],
+        "states": ["national"],
+        "stages": ["idea", "started", "running"],
+        "type": ["Mixed"],
+        "ease": 5,
+        "benefit": 3,
+        "processingTime": 1,
+        "description": "Free online registration that takes minutes and is what unlocks most other schemes, subsidised credit and formal buyers."
+    },
+    {
+        "id": "ahidf",
+        "url": "https://ahidf.udyamimitra.in/",
+        "name": "Animal Husbandry Infrastructure Development Fund",
+        "craftCategories": ["Dairy", "Poultry"],
+        "states": ["national"],
+        "stages": ["started", "running"],
+        "type": ["Loan"],
+        "ease": 2,
+        "benefit": 5,
+        "processingTime": 4,
+        "description": "Bank loan for chilling, storage and processing equipment, with the government paying 3% of the interest and guaranteeing the loan for small units."
+    },
+    {
+        "id": "agri-infra-fund",
+        "url": "https://agriinfra.dac.gov.in/",
+        "name": "Agriculture Infrastructure Fund",
+        "craftCategories": ["Horticulture", "Food Preservation", "Dairy"],
+        "states": ["national"],
+        "stages": ["started", "running"],
+        "type": ["Loan"],
+        "ease": 3,
+        "benefit": 4,
+        "processingTime": 3,
+        "description": "Loan for storage, drying and grading facilities after harvest, with 3% of the interest paid by the government. SHGs can apply."
+    },
+    {
+        "id": "pm-surya-ghar",
+        "url": "https://pmsuryaghar.gov.in/",
+        "name": "PM Surya Ghar (free rooftop solar)",
+        "craftCategories": ["all"],
+        "states": ["national"],
+        "stages": ["idea", "started", "running"],
+        "type": ["Grant"],
+        "ease": 3,
+        "benefit": 4,
+        "processingTime": 3,
+        "description": "Subsidy on a rooftop solar panel for the house, which then runs light and small machines even when the grid supply is not there."
+    },
+    {
+        "id": "gem-womaniya",
+        "url": "https://gem.gov.in/womaniya",
+        "name": "GeM Womaniya",
+        "craftCategories": ["all"],
+        "states": ["national"],
+        "stages": ["started", "running"],
+        "type": ["Mixed"],
+        "ease": 3,
+        "benefit": 4,
+        "processingTime": 2,
+        "description": "Sell directly to government offices online through the Government e-Marketplace, reserved for women sellers and SHGs. The buyer comes to the listing, so distance to a market stops deciding things."
+    },
+    {
+        "id": "trifed",
+        "url": "https://trifed.tribal.gov.in/",
+        "name": "TRIFED (Tribes India)",
+        "craftCategories": ["Craft", "Handloom", "Food Preservation"],
+        "states": ["national"],
+        "stages": ["started", "running"],
+        "type": ["Mixed"],
+        "ease": 3,
+        "benefit": 4,
+        "processingTime": 3,
+        "description": "Buys craft, handloom and forest produce from tribal artisans and SHGs and sells it through Tribes India shops and online."
+    },
+    {
+        "id": "svep",
+        "url": "https://svep.nrlm.gov.in/",
+        "name": "Start-up Village Entrepreneurship Programme",
+        "craftCategories": ["all"],
+        "states": ["national"],
+        "stages": ["idea", "started"],
+        "type": ["Mixed"],
+        "ease": 4,
+        "benefit": 3,
+        "processingTime": 2,
+        "description": "For SHG members starting a village enterprise: seed money plus a trained local Community Resource Person who helps run the books and the business."
+    },
+    {
+        "id": "foscos",
+        "url": "https://foscos.fssai.gov.in/",
+        "name": "FSSAI Registration (FoSCoS)",
+        "craftCategories": ["Food Preservation", "Dairy"],
+        "states": ["national"],
+        "stages": ["idea", "started", "running"],
+        "type": ["Mixed"],
+        "ease": 5,
+        "benefit": 3,
+        "processingTime": 1,
+        "description": "The basic food licence, Rs 100 a year for a small unit and done online. Shops and buyers will not take packed food without it."
+    },
 ]

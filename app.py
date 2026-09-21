@@ -11,11 +11,18 @@ from data.skills import SKILLS
 from data.states import STATES
 from data.schemes import SCHEMES
 from data.channels import CHANNELS
-from data.questions import BESPOKE_QUESTIONS, UNIVERSAL_SLOTS, question_for
+from data.questions import (
+    BESPOKE_QUESTIONS, UNIVERSAL_SLOTS, question_for, short_label_hi_for,
+)
 from data.day_questions import CONFIDENCE_CHECK, DAY_PROMPTS, THIS_OR_THAT
 from logic.skill_matching import match_skill_combined, match_skill_multi
-from logic.llm import CAPABILITY_CLUSTERS, looks_untranslated, read_her_day, translate_to_english
-from logic.requirements import assess_skill, pick_bridging_slots, shortlist_alternatives, slots_needed_for
+from logic.llm import CAPABILITY_CLUSTERS, looks_untranslated, read_her_day
+from logic.requirements import (
+    SUSTAINABLE_SCORE, pick_bridging_slots, points_lost, score_if_fixed,
+    slots_needed_for,
+)
+from logic.remedies import assess_with_remedies, shortlist_with_remedies
+from data.regions import known_districts, odop_for, regional_evidence
 from logic.scheme_matching import match_schemes
 from logic.channel_ranking import rank_channels
 from logic.roadmap import build_roadmap, build_alternative_narrative
@@ -25,22 +32,86 @@ st.set_page_config(page_title="SHG Guider")
 
 SKILLS_BY_ID = {s["id"]: s for s in SKILLS}
 ALTERNATIVES_TO_VALIDATE = 3
-OPTIONAL_FIELDS = {"district_area"}  # collected for context, not scored, so never blocks progress
+OPTIONAL_FIELDS = set()  # district_area now drives regional lookups, so it must resolve
 
 st.session_state.setdefault("step", "entry")
 st.session_state.setdefault("profile", {})
 
 st.title("SHG Guider")
 
+# MyMemory gives an anonymous caller about 1,000 words a day per IP address,
+# which one afternoon of testing exhausts — it then returns its quota warning
+# as the "translation" rather than an error. Supplying any working email raises
+# that to roughly 50,000 words a day, still free and still no signup. It is
+# optional and off by default: set MYMEMORY_EMAIL in .streamlit/secrets.toml
+# to turn it on. The address is sent to MyMemory with every request, so this is
+# a deliberate choice rather than something the app does on its own.
+def mymemory_email():
+    try:
+        return st.secrets.get("MYMEMORY_EMAIL") or os.environ.get("MYMEMORY_EMAIL")
+    except Exception:
+        return os.environ.get("MYMEMORY_EMAIL")  # no secrets.toml at all
+
+
+def translation_outage():
+    """
+    Why MyMemory refused, in words she can act on.
+
+    The two failures need opposite advice and look identical from the exception:
+    tripping the 5-requests-a-second limit clears in a moment, while exhausting
+    the day's free quota does not clear until it resets. Telling her to speak
+    again in the second case sends her round a loop that cannot succeed, so the
+    reason is read from MyMemory's own response rather than guessed.
+
+    Asked once per session and remembered, because this runs on a screen that
+    reruns on every interaction.
+    """
+    if "_translation_outage" in st.session_state:
+        return st.session_state["_translation_outage"]
+
+    detail = ""
+    try:
+        import requests
+        params = {"q": "नमस्ते", "langpair": "hi-IN|en-US"}
+        email = mymemory_email()
+        if email:
+            params["de"] = email
+        detail = requests.get("https://api.mymemory.translated.net/get",
+                              params=params, timeout=10).json().get("responseDetails") or ""
+    except Exception:
+        pass
+
+    if "ALL AVAILABLE FREE TRANSLATIONS" in detail.upper():
+        when = re.search(r"NEXT AVAILABLE IN\s+(\d+)\s+HOURS", detail.upper())
+        gap_hi = f" लगभग {when.group(1)} घंटे बाद यह फिर चालू होगा।" if when else ""
+        gap_en = f" It starts working again in about {when.group(1)} hours." if when else ""
+        reason = (
+            "अनुवाद सेवा की आज की मुफ़्त सीमा पूरी हो गई है, इसलिए हुनर मिलाना अभी रुका है।"
+            + gap_hi + " दोबारा बोलने से अभी फ़र्क़ नहीं पड़ेगा।",
+            "The translation service's free limit for today is used up, so the skill "
+            "cannot be matched right now." + gap_en + " Speaking again will not help until then.",
+        )
+    else:
+        reason = (
+            "अनुवाद अभी नहीं हो पा रहा। थोड़ा रुककर फिर से बोलकर देखें।",
+            "The translation service did not respond just now. Wait a moment and try speaking again.",
+        )
+
+    st.session_state["_translation_outage"] = reason
+    return reason
+
+
 # Function that actually translates Hindi text to English text
 @st.cache_data
 def translate_hi_to_en(hindi_text):
-    return MyMemoryTranslator(source="hi-IN", target="en-US").translate(hindi_text)
+    return MyMemoryTranslator(source="hi-IN", target="en-US",
+                              email=mymemory_email()).translate(hindi_text)
 
 # Function that actually translates English text to Hindi text
 @st.cache_data
 def translate_en_to_hi(english_text):
-    return MyMemoryTranslator(source="en-US", target="hi-IN").translate(english_text)
+    return MyMemoryTranslator(source="en-US", target="hi-IN",
+                              email=mymemory_email()).translate(english_text)
 
 # MyMemoryTranslator cannot take more than 500 characters at a time, so long
 # text goes over in chunks.
@@ -98,26 +169,20 @@ def translate_long_en_to_hi(text):
 
 def translate_long_hi_to_en(text):
     """
-    Claude first when a key is configured, MyMemory as the fallback, None if
-    both fail.
-
     Returns None rather than raising. MyMemory rate-limits hard (5 req/sec) and
     it used to take down the skill screen mid-flow; worse, the caller had
     already stored her Hindi by then, so the half-written state broke that
     screen on every later rerun too. Callers must handle None.
+
+    Successful translations are remembered for the session. Streamlit reruns
+    the whole script on every interaction, so without this her one spoken
+    sentence would be re-sent to MyMemory on each rerun and burn the daily
+    quota on text we have already translated. Only successes are stored, so a
+    failure is retried rather than cached.
     """
-    key = llm_api_key()
-    if key:
-        # Remember only successes. This was @st.cache_data, which also cached
-        # the None from a failed call — so adding a key mid-session had no
-        # effect until Streamlit was restarted.
-        memo = st.session_state.setdefault("_translation_memo", {})
-        if text not in memo:
-            result = translate_to_english(text, api_key=key)
-            if result:
-                memo[text] = result
-        if memo.get(text):
-            return memo[text]
+    memo = st.session_state.setdefault("_translation_memo", {})
+    if text in memo:
+        return memo[text]
 
     try:
         english = " ".join(translate_hi_to_en(chunk) for chunk in _split_into_chunks(text))
@@ -127,7 +192,11 @@ def translate_long_hi_to_en(text):
     # MyMemory sometimes echoes the Hindi straight back, or returns its quota
     # warning as the "translation". Handing either to the English skill matcher
     # gives a confident wrong match rather than an error, so treat it as a miss.
-    return None if looks_untranslated(english) else english
+    if looks_untranslated(english):
+        return None
+
+    memo[text] = english
+    return english
 
 # Generated speech is cached here rather than in the project root, where it
 # was dropping ~50 loose .mp3 files. Regenerated on demand, so it's disposable.
@@ -152,6 +221,19 @@ def hindi_prompt_button(hindi_text, filename):
             speak_hindi(hindi_text, filename)
         except Exception:
             st.caption("आवाज़ अभी उपलब्ध नहीं है / Audio unavailable just now")
+
+
+def bilingual(hindi, english, hindi_style=st.write):
+    """
+    Every line she is shown appears in both languages: Hindi for her, English
+    underneath for anyone reading over her shoulder — a field worker, a
+    supervisor, or whoever is evaluating this. Hindi leads because she is the
+    user; English is the caption, never the other way round.
+    """
+    if hindi:
+        hindi_style(hindi)
+    if english:
+        st.caption(english)
 
 
 def llm_api_key():
@@ -186,9 +268,9 @@ def restart():
     st.session_state.profile = {}
 
 
-def _voice_question_block(hindi_prompt, filename, key):
+def _voice_question_block(hindi_prompt, filename, key, english_prompt=None):
     """Shared voice-capture UI: prompt + optional TTS + mic input, returns (hi_text, en_text) or (None, None)."""
-    st.write(hindi_prompt)
+    bilingual(hindi_prompt, english_prompt)
     hindi_prompt_button(hindi_prompt, filename)
     voice_text = speech_to_text(
         language="hi-IN",
@@ -224,18 +306,19 @@ def render_questions(keys, skill_id=None, key_prefix=""):
         with st.container(border=True):
             if qtype == "voice_open":
                 hi_text, en_text = _voice_question_block(
-                    q["hindi_prompt"], f"prompt_{key}.mp3", f"{key_prefix}voice_{key}"
+                    q["hindi_prompt"], f"prompt_{key}.mp3", f"{key_prefix}voice_{key}",
+                    english_prompt=q.get("label_en"),
                 )
                 if hi_text:
                     profile[key + "_hi"] = hi_text
                     if en_text:  # translation is optional here — the Hindi is the answer
                         profile[key] = en_text
                 if profile.get(key + "_hi"):
-                    st.caption(f"आपने कहा: {profile[key + '_hi']}")
+                    st.caption(f"आपने कहा / you said: {profile[key + '_hi']}")
                     if profile.get(key):
                         st.caption(f"You said: {profile[key]}")
             else:
-                st.write(q["label_en"])
+                bilingual(q["hindi_prompt"], q["label_en"])
                 hindi_prompt_button(q["hindi_prompt"], f"prompt_{key}.mp3")
 
                 if qtype == "select":
@@ -260,10 +343,72 @@ def render_questions(keys, skill_id=None, key_prefix=""):
     return answered
 
 
+def confirm_district():
+    """
+    Her spoken district has to resolve to a real one, or none of the regional
+    data can be looked up. Voice first, then a pick-list seeded with whatever
+    matched — district names are exactly the kind of proper noun transcription
+    gets wrong, and a silent mismatch would look like "no data for your area".
+    """
+    profile = st.session_state.profile
+    state = profile.get("state")
+    if not state:
+        return False
+
+    districts = known_districts(state)
+
+    # The district is captured here rather than in render_questions: that ran
+    # first and checked the answer before this function had written it, so the
+    # screen sat one rerun behind and the Continue button never enabled.
+    question = question_for("district_area")
+    hi_text, _en = _voice_question_block(
+        question["hindi_prompt"], "prompt_district_area.mp3", "voice_district_area"
+    )
+    if hi_text:
+        profile["district_area_hi"] = hi_text
+
+    spoken = profile.get("district_area_hi") or profile.get("district_area") or ""
+    matched = profile.get("district_confirmed")
+
+    if not matched and spoken:
+        for name in districts:
+            a = "".join(c for c in name.lower() if c.isalnum())
+            b = "".join(c for c in spoken.lower() if c.isalnum())
+            if a and (a == b or a in b or b in a):
+                matched = name
+                break
+
+    with st.container(border=True):
+        st.write("आपका ज़िला / Your district")
+        if spoken:
+            st.caption(f"आपने कहा / you said: {spoken}")
+        choice = st.selectbox(
+            "Your district",
+            options=districts,
+            index=districts.index(matched) if matched in districts else None,
+            placeholder="अपना ज़िला चुनिए / choose your district",
+            key="district_confirm",
+            label_visibility="collapsed",
+        )
+        if choice:
+            profile["district_confirmed"] = choice
+            profile["district_area"] = choice
+            product = odop_for(state, choice)
+            if product:
+                st.success(f"{choice} — इस ज़िले की पहचान / known for: **{product}**")
+                st.caption("This is used to check what raw material is available near you.")
+    return bool(profile.get("district_confirmed"))
+
+
 def continue_button(ready, label="आगे बढ़ें Go ahead"):
     if not ready:
         st.info("कृपया आगे बढ़ने से पहले सभी सवालों के जवाब दें / Please answer all the questions")
     return st.button(label, icon=":material/arrow_forward:", disabled=not ready)
+
+
+# Handled by confirm_district() instead, which needs the answer in the same
+# run it is checked.
+DISTRICT_HANDLED_SEPARATELY = {"district_area"}
 
 
 def questions_for_skill(skill_id):
@@ -274,34 +419,239 @@ def questions_for_skill(skill_id):
     # what makes them scored), so filter them out here or each would render
     # twice and collide on its widget key.
     bespoke = [q["id"] for q in BESPOKE_QUESTIONS.get(skill_id, []) if q["id"] not in own_slots]
-    return UNIVERSAL_SLOTS + own_slots + bespoke
+    keys = UNIVERSAL_SLOTS + own_slots + bespoke
+    return [k for k in keys if k not in DISTRICT_HANDLED_SEPARATELY]
 
 
 def show_requirement_breakdown(assessment):
     icons = {"met": "✅", "partial": "🟡", "unmet": "❌", "unknown": "❔"}
     with st.container(border=True):
         for d in sorted(assessment["details"], key=lambda d: -d["weight"]):
-            critical = " *(critical)*" if d["weight"] >= 3 else ""
-            st.write(f"{icons[d['status']]} {d['label']}{critical}")
+            critical = " *(ज़रूरी / critical)*" if d["weight"] >= 3 else ""
+            # A gap with a route around it shows as bridged, not failed — she
+            # should see the obstacle and the way past it in the same line.
+            if d.get("remedy"):
+                st.write(f"🔑 {d['short_label']}{critical}")
+                st.caption(f"↳ {d['remedy']['hindi']}")
+                st.caption(f"↳ {d['remedy']['english']}")
+            else:
+                st.write(f"{icons[d['status']]} {d['short_label']}{critical}")
+
+
+def show_failure_summary(assessment, skill, profile):
+    """
+    The whole picture of why this skill is hard here, on one screen.
+
+    The verdict screen used to give her a number and a flat list of ticks and
+    crosses, which says that it failed but not why, nor which gap matters most.
+    This separates the three things she actually needs to tell apart — what is
+    genuinely stopping her, what is merely missing but arrangeable, and what she
+    already has — and puts a cost in points against each failure so the score
+    stops being an assertion and becomes something she can follow.
+
+    The last panel is the point of the screen: she ticks what she thinks she
+    could arrange and watches the score move. Nothing is hidden from her and
+    nothing is guessed — it is the same arithmetic that produced the verdict.
+    """
+    lost = points_lost(assessment)
+    details = assessment["details"]
+    blocking = [d for d in details if d["status"] == "unmet" and not d.get("remedy")]
+    bridged = [d for d in details if d.get("remedy")]
+    holding = [d for d in details if d["status"] in ("met", "partial") and not d.get("remedy")]
+    unasked = [d for d in details if d["status"] == "unknown"]
+
+    district = profile.get("district_confirmed") or profile.get("district_area") or ""
+
+    st.markdown("#### क्यों मुश्किल है / Why this is difficult")
+
+    # The two or three gaps doing the most damage, named up front — she should
+    # not have to read a list of twelve rows to find out what actually decided it.
+    worst = sorted(lost, key=lambda slot: -lost[slot])[:3]
+    if worst:
+        by_slot = {d["slot"]: d for d in details}
+        hi_names = ", ".join(short_label_hi_for(s, skill["id"]) for s in worst)
+        en_names = ", ".join(by_slot[s]["short_label"].lower() for s in worst)
+        where_hi = f"{district} में " if district else ""
+        where_en = f" in {district}" if district else ""
+        bilingual(
+            f"{where_hi}इस काम में सबसे ज़्यादा फ़र्क़ इन्हीं से पड़ रहा है: {hi_names}। "
+            f"इन्हीं की वजह से {sum(lost[s] for s in worst)} अंक कम हुए हैं।",
+            f"What weighs on this work{where_en} is mainly: {en_names} — "
+            f"together they account for {sum(lost[s] for s in worst)} of the missing points.",
+        )
+
+    left, middle, right = st.columns(3)
+    left.metric("रुकावटें / Blocking", len(blocking))
+    middle.metric("रास्ता मिला / Has a route", len(bridged))
+    right.metric("आपके पास है / Already yours", len(holding))
+
+    tabs = st.tabs([
+        f"🚧 रुकावट / Blocking ({len(blocking)})",
+        f"🔑 इंतज़ाम हो सकता है / Can be arranged ({len(bridged)})",
+        f"✅ जो आपके पास है / Already yours ({len(holding)})",
+    ])
+
+    def rows(items, show_cost=True):
+        for d in sorted(items, key=lambda d: (-lost.get(d["slot"], 0), -d["weight"])):
+            cost = lost.get(d["slot"], 0)
+            critical = " · ज़रूरी / critical" if d["weight"] >= 3 else ""
+            st.write(f"**{short_label_hi_for(d['slot'], skill['id'])}**{critical}")
+            st.caption(d["short_label"])
+            if show_cost and cost:
+                st.progress(min(cost, 100) / 100, text=f"−{cost} अंक / −{cost} points")
+
+    with tabs[0]:
+        if blocking:
+            bilingual(
+                "इनका कोई रास्ता अभी नहीं मिला — यही इस काम को रोक रहे हैं।",
+                "No way around these was found — these are what hold the work back.",
+            )
+            rows(blocking)
+        else:
+            bilingual(
+                "कोई ऐसी रुकावट नहीं है जिसका रास्ता न हो।",
+                "Nothing here is blocking outright — every gap has a route around it.",
+            )
+
+    with tabs[1]:
+        if bridged:
+            bilingual(
+                "ये कम हैं, पर इनका इंतज़ाम हो सकता है। नीचे हर एक का रास्ता दिया है।",
+                "These are short, but they can be arranged. The route for each is below.",
+            )
+            rows(bridged)
+        else:
+            bilingual("अभी कोई रास्ता नहीं मिला।", "No routes were found yet.")
+
+    with tabs[2]:
+        if holding:
+            bilingual(
+                "ये आपके पास पहले से हैं — शुरुआत यहीं से होती है।",
+                "You already have these — this is what you would be building on.",
+            )
+            rows(holding, show_cost=False)
+        else:
+            bilingual("अभी तक कुछ पूरा नहीं मिला।", "Nothing is fully in place yet.")
+
+    if unasked:
+        st.caption(
+            f"{len(unasked)} बातें अभी पूछी नहीं गईं, इसलिए उन्हें गिना नहीं गया / "
+            f"{len(unasked)} things were not asked, so they were left out of the score"
+        )
+
+    # --- what she would need to change, tried out live
+    fixable = [d for d in details if d["slot"] in lost]
+    if not fixable:
+        return
+
+    st.markdown("**अगर ये इंतज़ाम हो जाएं तो? / What if these were arranged?**")
+    st.caption("जो आप जुटा सकती हैं उन्हें चुनें / Tick what you think you could manage")
+
+    chosen = []
+    for d in sorted(fixable, key=lambda d: -lost[d["slot"]]):
+        route = " 🔑" if d.get("remedy") else ""
+        label = (f"{short_label_hi_for(d['slot'], skill['id'])} / {d['short_label']}"
+                 f"  (+{lost[d['slot']]}){route}")
+        if st.checkbox(label, key=f"whatif_{skill['id']}_{d['slot']}"):
+            chosen.append(d["slot"])
+
+    new_score = score_if_fixed(assessment, chosen)
+    left_gaps = [d for d in blocking if d["slot"] not in chosen]
+
+    st.progress(min(new_score, 100) / 100,
+                text=f"{assessment['score']} → {new_score} / 100")
+    if not chosen:
+        bilingual(
+            "ऊपर कुछ चुनिए और देखिए स्कोर कहाँ पहुँचता है।",
+            "Tick one above and watch where the score reaches.",
+        )
+    elif new_score >= SUSTAINABLE_SCORE and not left_gaps:
+        st.success(
+            f"इतना हो जाए तो यह काम आपके यहाँ चल सकता है ({new_score}/100) / "
+            f"Arrange these and this work can support you where you are ({new_score}/100)"
+        )
+    elif left_gaps:
+        bilingual(
+            "इतने से भी " + ", ".join(short_label_hi_for(d["slot"], skill["id"])
+                                      for d in left_gaps) + " बाकी रह जाता है।",
+            "Even then, " + ", ".join(d["short_label"].lower() for d in left_gaps)
+            + " would still be in the way.",
+        )
+    else:
+        bilingual(
+            f"स्कोर {new_score} तक पहुँचता है, अभी भी {SUSTAINABLE_SCORE} से कम है।",
+            f"That reaches {new_score}, still short of the {SUSTAINABLE_SCORE} this work needs.",
+        )
+
+
+def show_remedies(assessment):
+    """
+    The gaps her district or a scheme can fill.
+
+    Presented as things to do rather than notes to read: each one names the
+    obstacle, the route around it, and — where there is one — the actual scheme
+    with what it offers, so she leaves with something she can act on rather
+    than a paragraph of reassurance.
+    """
+    remedies = [d for d in assessment["details"] if d.get("remedy")]
+    if not remedies:
+        return
+
+    st.markdown("**आपकी कमी कैसे पूरी हो सकती है / How your gaps can be filled**")
+    st.caption(
+        f"{len(remedies)} अड़चनों का रास्ता मिला / "
+        f"{len(remedies)} obstacle{'s' if len(remedies) > 1 else ''} with a way around them"
+    )
+
+    kinds = {
+        "regional": ("📍", "आपके ज़िले में मौजूद है", "Available in your district"),
+        "scheme": ("🏛️", "सरकारी योजना से", "Through a government scheme"),
+        "structural": ("👥", "आपके अपने इंतज़ाम से", "Something you can arrange"),
+    }
+
+    for d in remedies:
+        r = d["remedy"]
+        icon, hi_kind, en_kind = kinds.get(r["kind"], ("🔑", "", ""))
+        with st.container(border=True):
+            st.markdown(f"{icon}  **{d['short_label']}** — {hi_kind} / {en_kind}")
+            bilingual(r["hindi"], r["english"])
+
+            # a scheme is only useful if she knows what it actually gives her
+            scheme = r.get("scheme")
+            if scheme:
+                with st.expander(f"{scheme['name']} — इसमें क्या मिलता है / what it offers"):
+                    st.write(scheme["description"])
+                    st.caption(
+                        f"मिलने में आसानी / ease {scheme['ease']}/5 · "
+                        f"फ़ायदा / benefit {scheme['benefit']}/5 · "
+                        f"समय / time to process {scheme['processingTime']}/5"
+                    )
+                    if scheme.get("url"):
+                        st.link_button(
+                            "यहाँ आवेदन करें / Apply here",
+                            scheme["url"],
+                            icon=":material/open_in_new:",
+                        )
 
 
 # ----------------------------------------------------------------------- entry
 # First Page -> Let user define the scenario to fit in
 if st.session_state.step == "entry":
-    st.subheader("Select the scenario best suits you...")
+    st.subheader("आप किस तरह से शुरू करना चाहती हैं?")
+    st.caption("Which of these describes you?")
 
     # First Scenario --->
     with st.container(border=True):
-        st.write("मुझे पता है कि मैं कौन सा काम करना चाहती हूं")
-        st.caption("I already know the skill I want to build a business around")
+        bilingual("मुझे पता है कि मैं कौन सा काम करना चाहती हूं",
+                  "I already know the skill I want to build a business around")
         if st.button("यह चुनें / Select", icon=":material/arrow_forward:", key="entry_known"):
             st.session_state.profile["flow"] = "known_skill"
             st.session_state.step = "skill_voice"
             st.rerun()
     # Second Scenario --->
     with st.container(border=True):
-        st.write("मुझे नहीं पता कि मैं कौन सा काम कर सकती हूं")
-        st.caption("I'm not sure which skill fits me — help me figure it out")
+        bilingual("मुझे नहीं पता कि मैं कौन सा काम कर सकती हूं",
+                  "I'm not sure which skill fits me — help me figure it out")
         if st.button("यह चुनें Select", icon=":material/arrow_forward:", key="entry_discover"):
             st.session_state.profile["flow"] = "discover_skill"
             st.session_state.step = "confidence_before"
@@ -311,7 +661,8 @@ if st.session_state.step == "entry":
 # Second Page -> First Scenario
 # First Screen on entering the first scenario, Here the user gives input in voice
 elif st.session_state.step == "skill_voice":
-    st.subheader("Say something about your skills or activities")
+    st.subheader("अपने काम या हुनर के बारे में बताएं")
+    st.caption("Tell me about the work or skill you have")
     hindi_prompt_button("अपने काम या हुनर के बारे में बताएं", "prompt_skill.mp3")
 
     # Capture your voice input and converts the voice to text in Hindi
@@ -327,14 +678,24 @@ elif st.session_state.step == "skill_voice":
         english_text = translate_long_hi_to_en(voice_text)
         st.session_state.profile["voice_description_hi"] = voice_text
         st.session_state.profile["voice_description_en"] = english_text
-            
 
-    # Writing the voice input of the user in Hindi and English
-    if st.session_state.profile.get("voice_description_en"):
-        st.write("आपने कहा:", st.session_state.profile["voice_description_hi"])
-        english_text = st.session_state.profile["voice_description_en"]
-        st.caption(f"In English: {english_text}")
+    # Writing the voice input of the user in Hindi and English. What she said
+    # is shown as soon as we have it — hearing her own words back is the proof
+    # the mic worked, and that must not wait on the translation service being
+    # up. Only the matching below needs the English.
+    hindi_text = st.session_state.profile.get("voice_description_hi")
+    english_text = st.session_state.profile.get("voice_description_en")
 
+    if hindi_text:
+        st.write("आपने कहा / You said:", hindi_text)
+        if english_text:
+            st.caption(f"In English: {english_text}")
+        else:
+            why_hi, why_en = translation_outage()
+            st.warning(why_hi)
+            st.caption(why_en)
+
+    if english_text:
         # Matching what she said against the 10 skills in the catalogue
         matches = match_skill_combined(english_text)
         best_skill_id, best_confidence = matches[0]
@@ -364,6 +725,7 @@ elif st.session_state.step == "skill_assessment":
 
     keys = questions_for_skill(profile["skill_id"])
     ready = render_questions(keys, skill_id=profile["skill_id"], key_prefix="own_")
+    ready = confirm_district() and ready
 
     if continue_button(ready):
         st.session_state.step = "assessment_verdict"
@@ -375,7 +737,7 @@ elif st.session_state.step == "skill_assessment":
 elif st.session_state.step == "assessment_verdict":
     profile = st.session_state.profile
     skill = SKILLS_BY_ID[profile["skill_id"]]
-    assessment = assess_skill(skill, profile)
+    assessment = assess_with_remedies(skill, profile, SCHEMES)
     profile["own_assessment"] = assessment
 
     st.subheader(f"{skill['name']} — आपके हालात में / In your situation")
@@ -390,9 +752,23 @@ elif st.session_state.step == "assessment_verdict":
             st.session_state.step = "roadmap_result"
             st.rerun()
     else:
-        st.warning("यह आपके इलाके में मुश्किल हो सकता है / This may be difficult where you are")
         if assessment["blockers"]:
+            st.warning("यह आपके इलाके में मुश्किल हो सकता है / This may be difficult where you are")
             st.write("मुख्य दिक्कत / Main difficulty: " + ", ".join(assessment["blockers"]))
+        else:
+            st.info(
+                "कुछ चीज़ें कम हैं, लेकिन उनका इंतज़ाम हो सकता है / "
+                "Some things are missing, but there are ways to arrange them"
+            )
+
+        # Why it failed, before what to do about it — she is being told her own
+        # skill will not work here, and deserves the full reasoning rather than
+        # a score and a list of crosses.
+        st.divider()
+        show_failure_summary(assessment, skill, profile)
+
+        st.divider()
+        show_remedies(assessment)
         if st.button("बेहतर विकल्प देखें / Look at better options", icon=":material/arrow_forward:"):
             st.session_state.step = "bridging_questions"
             st.rerun()
@@ -413,8 +789,8 @@ elif st.session_state.step == "bridging_questions":
     ready = render_questions(profile["bridging_slots"], key_prefix="bridge_")
 
     if continue_button(ready):
-        shortlist, eliminated, fallback = shortlist_alternatives(
-            SKILLS, profile, exclude=exclude, n=ALTERNATIVES_TO_VALIDATE
+        shortlist, eliminated, fallback = shortlist_with_remedies(
+            SKILLS, profile, SCHEMES, exclude=exclude, n=ALTERNATIVES_TO_VALIDATE
         )
         profile["validation_queue"] = [r["skill_id"] for r in shortlist]
         profile["eliminated_at_shortlist"] = [
@@ -473,7 +849,7 @@ elif st.session_state.step == "alternatives_result":
     queue = profile.get("validation_queue", [])
 
     assessed = sorted(
-        (assess_skill(SKILLS_BY_ID[sid], profile) for sid in queue),
+        (assess_with_remedies(SKILLS_BY_ID[sid], profile, SCHEMES) for sid in queue),
         key=lambda r: (r["ranking_score"], r["score"]),
         reverse=True,
     )
@@ -580,7 +956,8 @@ elif st.session_state.step == "day_narrative":
     for q in DAY_PROMPTS:
         with st.container(border=True):
             hi_text, en_text = _voice_question_block(
-                q["hindi_prompt"], f"prompt_{q['id']}.mp3", f"voice_{q['id']}"
+                q["hindi_prompt"], f"prompt_{q['id']}.mp3", f"voice_{q['id']}",
+                english_prompt=q.get("label_en"),
             )
             if hi_text:
                 profile[q["id"] + "_hi"] = hi_text
@@ -589,7 +966,7 @@ elif st.session_state.step == "day_narrative":
                 if en_text:
                     profile[q["id"]] = en_text
             if profile.get(q["id"] + "_hi"):
-                st.caption(f"आपने कहा: {profile[q['id'] + '_hi']}")
+                st.caption(f"आपने कहा / you said: {profile[q['id'] + '_hi']}")
 
     # Only the first prompt is required — the rest are invitations, and an
     # empty answer to "what did you stop doing?" is itself fine.
@@ -610,7 +987,7 @@ elif st.session_state.step == "this_or_that":
 
     for q in THIS_OR_THAT:
         with st.container(border=True):
-            st.write(q["hindi_prompt"])
+            bilingual(q["hindi_prompt"], q.get("label_en"))
             hindi_prompt_button(q["hindi_prompt"], f"prompt_{q['id']}.mp3")
             labels = {o["value"]: o["label_hi"] for o in q["options"]}
             choice = st.segmented_control(
@@ -652,9 +1029,9 @@ elif st.session_state.step == "mirror":
 
     if reading:
         st.subheader("आप जो पहले से जानती हैं / What you already know how to do")
-        st.write(reading["mirror_hindi"])
-        # mirror_hindi comes back from Claude already in Hindi, so it goes
+        # mirror_hindi comes back from the model already in Hindi, so it goes
         # straight to gTTS — no MyMemory round-trip, no 500-char limit.
+        bilingual(reading["mirror_hindi"], reading["mirror_english"])
         hindi_prompt_button(reading["mirror_hindi"], "mirror.mp3")
 
         # The capability clusters are the reasoning behind the candidates below,
@@ -665,8 +1042,7 @@ elif st.session_state.step == "mirror":
                 for cluster in reading["capability_clusters"]:
                     st.write(f"✅ {CAPABILITY_CLUSTERS[cluster]}")
 
-        with st.expander("In English"):
-            st.write(reading["mirror_english"])
+        with st.expander("जो हमने सुना / What we heard from you"):
             if reading["activities"]:
                 st.caption("Heard from you: " + "; ".join(reading["activities"]))
 
@@ -674,13 +1050,14 @@ elif st.session_state.step == "mirror":
         # about yourself with no recourse is the worst outcome for the one
         # screen whose whole job is building confidence.
         if st.button("यह मेरे बारे में सही नहीं है / This isn't right about me", icon=":material/replay:"):
-            for key in ("skill_reading", "first_step_hindi"):
+            for key in ("skill_reading", "first_step_hindi", "first_step_english"):
                 profile.pop(key, None)
             st.session_state.step = "day_narrative"
             st.rerun()
 
         candidate_ids = [i for i in reading["candidate_skill_ids"] if i in SKILLS_BY_ID]
         profile["first_step_hindi"] = reading.get("first_step_hindi")
+        profile["first_step_english"] = reading.get("first_step_english")
     else:
         # No key, or the call failed. Fall back to the deterministic matcher so
         # the flow still completes — she just doesn't get the reflection.
@@ -715,14 +1092,17 @@ elif st.session_state.step == "universal_slots":
     st.subheader("आपके बारे में कुछ बातें / A few things about you")
     st.caption("These apply whichever work turns out to suit you best.")
 
-    ready = render_questions(UNIVERSAL_SLOTS, key_prefix="univ_")
+    ready = render_questions(
+        [k for k in UNIVERSAL_SLOTS if k not in DISTRICT_HANDLED_SEPARATELY], key_prefix="univ_"
+    )
+    ready = confirm_district() and ready
 
     if continue_button(ready):
         profile = st.session_state.profile
         candidate_ids = profile.get("discovery_candidate_ids") or [s["id"] for s in SKILLS]
         candidates = [SKILLS_BY_ID[sid] for sid in candidate_ids if sid in SKILLS_BY_ID]
-        shortlist, eliminated, fallback = shortlist_alternatives(
-            candidates, profile, n=ALTERNATIVES_TO_VALIDATE
+        shortlist, eliminated, fallback = shortlist_with_remedies(
+            candidates, profile, SCHEMES, n=ALTERNATIVES_TO_VALIDATE
         )
         profile["validation_queue"] = [r["skill_id"] for r in shortlist]
         profile["eliminated_at_shortlist"] = [
@@ -751,26 +1131,31 @@ elif st.session_state.step == "roadmap_result":
         final_skill, channel_profile, scheme_result, ranked_channels, profile.get("final_assessment")
     )
 
-    st.subheader(f"आपका रोडमैप: {roadmap['skill']}")
+    st.subheader(f"आपका रोडमैप / Your roadmap: {roadmap['skill']}")
     st.write(roadmap["spoken_summary"])
     hindi_prompt_button(translate_long_en_to_hi(roadmap["spoken_summary"]), "roadmap_summary.mp3")
 
     if roadmap["top_scheme"]:
-        st.markdown(f"**सुझाई गई योजना:** {roadmap['top_scheme']['name']}")
+        st.markdown(f"**सुझाई गई योजना / Recommended scheme:** {roadmap['top_scheme']['name']}")
         st.caption(roadmap["top_scheme"]["description"])
+        if roadmap["top_scheme"].get("url"):
+            st.link_button("यहाँ आवेदन करें / Apply here", roadmap["top_scheme"]["url"],
+                           icon=":material/open_in_new:")
 
     if roadmap["alternate_schemes"]:
-        st.markdown("**अन्य योग्य योजनाएं:**")
+        st.markdown("**अन्य योग्य योजनाएं / Other schemes you qualify for:**")
         for s in roadmap["alternate_schemes"]:
             st.write(f"- {s['name']}: {s['description']}")
+            if s.get("url"):
+                st.caption(s["url"])
 
-    st.markdown(f"**सुझाया गया बिक्री माध्यम:** {roadmap['top_channel']['name']}")
+    st.markdown(f"**सुझाया गया बिक्री माध्यम / Recommended selling channel:** {roadmap['top_channel']['name']}")
     st.caption(roadmap["top_channel"]["description"])
 
-    st.markdown("**आपूर्ति श्रृंखला:**")
+    st.markdown("**आपूर्ति श्रृंखला / Supply chain:**")
     st.write(roadmap["supply_chain"]["summary"])
 
-    st.markdown("**मौसम और अन्य बातें:**")
+    st.markdown("**मौसम और अन्य बातें / Weather and other notes:**")
     st.write(roadmap["environmental_note"])
 
     if roadmap["assessment"]:
@@ -787,7 +1172,8 @@ elif st.session_state.step == "roadmap_result":
     if first_step:
         st.markdown("**इस हफ़्ते का पहला कदम / Your first step this week:**")
         with st.container(border=True):
-            st.write(first_step)
+            bilingual(first_step, profile.get("first_step_english")
+                      or final_skill.get("first_step_english"))
             hindi_prompt_button(first_step, "first_step.mp3")
 
     # The "after" half of the confidence measurement, asked only of the

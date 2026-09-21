@@ -33,7 +33,8 @@ SKILLS = [
         "environmental": "Demand often peaks around festival seasons. Worth checking how many other women nearby already make similar items before settling on one design.",
         "resource_keywords": ["wood", "clay", "fabric", "metal", "glass", "bamboo", "fiber", "craft", "carving", "pottery", "bead", "thread"],
         "first_step_hindi": "इस हफ़्ते अपनी सबसे अच्छी दो चीज़ें बनाइए और किसी त्योहार वाले बाज़ार में दाम पूछ कर आइए।",
-        "requirements": {
+        "first_step_english": "This week, make your two best pieces and go ask what they'd fetch at a festival market.",
+"requirements": {
             "craft_materials": {"min": "some", "weight": CRITICAL},
             "market_distance": {"min": "moderate", "weight": MODERATE},
             "daily_hours": {"min": "2_to_4", "weight": MODERATE},
@@ -57,7 +58,8 @@ SKILLS = [
         "environmental": "Hot, dry weather generally helps preservation. Monsoon months need extra care with storage and drying time.",
         "resource_keywords": ["mango", "vegetable", "fruit", "spice", "pickle", "preserve", "jar", "produce"],
         "first_step_hindi": "इस हफ़्ते चार छोटे डिब्बे अचार बनाइए और दो पड़ोसियों को दाम लगाकर देकर देखिए।",
-        "requirements": {
+        "first_step_english": "This week, make four small jars of pickle and offer them to two neighbours at a set price.",
+"requirements": {
             "seasonal_produce": {"min": "some", "weight": CRITICAL},
             "covered_space": {"min": "small_corner", "weight": MODERATE},
             "capital_available": {"min": "under_25k", "weight": LOW},
@@ -81,7 +83,8 @@ SKILLS = [
         "environmental": "Demand is fairly steady year-round, with spikes around festivals and the wedding season.",
         "resource_keywords": ["fabric", "cloth", "sew", "stitch", "tailor", "thread", "garment", "needle", "machine"],
         "first_step_hindi": "इस हफ़्ते दो पड़ोसियों के कपड़े सिलकर या ठीक करके पैसे लेकर देखिए, और हिसाब लिख लीजिए।",
-        "requirements": {
+        "first_step_english": "This week, stitch or mend clothes for two neighbours for money, and write down what you earned.",
+"requirements": {
             "cloth_market": {"min": "some", "weight": CRITICAL},
             "capital_available": {"min": "25k_75k", "weight": MODERATE},
             "covered_space": {"min": "small_corner", "weight": MODERATE},
@@ -106,7 +109,8 @@ SKILLS = [
         "environmental": "Summer heat raises spoilage risk. Monsoon can affect milk supply consistency from local livestock.",
         "resource_keywords": ["cow", "buffalo", "milk", "dairy", "cattle", "livestock", "paneer", "ghee", "curd"],
         "first_step_hindi": "इस हफ़्ते एक दिन का दूध पनीर बनाकर दो घरों में बेचकर देखिए, और लागत का हिसाब रखिए।",
-        "requirements": {
+        "first_step_english": "This week, turn one day's milk into paneer and sell it to two households, keeping track of your costs.",
+"requirements": {
             "livestock_milk": {"min": "some", "weight": CRITICAL},
             "cold_storage": {"min": "yes", "weight": CRITICAL},
             "capital_available": {"min": "25k_75k", "weight": MODERATE},
@@ -120,7 +124,11 @@ SKILLS = [
     {
         "id": "weaving",
         "name": "Handloom weaving",
-        "category": "Textile",
+        # Handloom, not plain Textile: the schemes differ. Handloom weavers are
+        # served by the Handloom Directorate's yarn and cluster schemes, while
+        # PM Vishwakarma's textile trade is tailoring — a weaver sent there
+        # would be turned away at the counter.
+        "category": "Handloom",
         "supply_chain": {
             "entry_cost": "₹15,000–40,000 for a manual table or pit loom individually; ₹75,000 to several lakh for a small cluster/workshop.",
             "equipment": "Manual table or pit loom; pre-loom prep (bobbin winding, warping, sizing, dressing) is typically done by other specialists.",
@@ -133,7 +141,8 @@ SKILLS = [
         "environmental": "Humidity can affect yarn quality during production. Many regions have loom clusters worth connecting with.",
         "resource_keywords": ["yarn", "loom", "weav", "handloom", "cotton", "cloth", "fabric", "thread"],
         "first_step_hindi": "इस हफ़्ते अपने आसपास पता कीजिए कि ताना-बाना का काम कौन करता है, और धागे का दाम पूछिए।",
-        "requirements": {
+        "first_step_english": "This week, find out who nearby does warping and bobbin work, and ask what yarn costs.",
+"requirements": {
             "yarn_weavers": {"min": "some", "weight": CRITICAL},
             "helpers_available": {"min": "three_plus", "weight": MODERATE},
             "covered_space": {"min": "one_room", "weight": MODERATE},
@@ -158,7 +167,8 @@ SKILLS = [
         "environmental": "Production is seasonal, tied to local flowering cycles. Meaningfully higher upfront cost than most other skills in this set.",
         "resource_keywords": ["bee", "honey", "hive", "flower", "apiary", "beekeeping", "colony"],
         "first_step_hindi": "इस हफ़्ते नज़दीकी कृषि केंद्र जाकर मधुमक्खी पालन के प्रशिक्षण के बारे में पूछिए।",
-        "requirements": {
+        "first_step_english": "This week, visit your nearest agricultural centre and ask about beekeeping training.",
+"requirements": {
             "flowering_land": {"min": "some", "weight": CRITICAL},
             "water_access": {"min": "yes", "weight": CRITICAL},
             "training_access": {"min": "yes", "weight": MODERATE},
@@ -183,7 +193,8 @@ SKILLS = [
         "environmental": "Disease and biosecurity is the single biggest threat — one outbreak can wipe out an entire batch. Hardy indigenous breeds (Kadaknath, Vanaraja, Gramapriya) suit low-input rural systems best.",
         "resource_keywords": ["chicken", "poultry", "hen", "egg", "bird", "kadaknath", "vanaraja", "gramapriya"],
         "first_step_hindi": "इस हफ़्ते पांच-दस चूज़े लेकर शुरू कीजिए, और टीकाकरण के बारे में पशु चिकित्सक से पूछिए।",
-        "requirements": {
+        "first_step_english": "This week, start with five or ten chicks, and ask a vet about vaccination.",
+"requirements": {
             "covered_space": {"min": "small_corner", "weight": CRITICAL},
             "livestock_birds": {"min": "some", "weight": MODERATE},
             "capital_available": {"min": "25k_75k", "weight": MODERATE},
@@ -210,7 +221,8 @@ SKILLS = [
         "environmental": "Fresh mushrooms spoil within just a few days — a buyer must be secured before harvest, or the product needs to be dried. Best beginner variety is oyster mushroom, tolerant of ambient humidity in many regions.",
         "resource_keywords": ["mushroom", "spawn", "straw", "sawdust", "agricultural waste", "paddy", "wheat"],
         "first_step_hindi": "इस हफ़्ते नज़दीकी कृषि विज्ञान केंद्र से स्पॉन का दाम पूछिए, और एक खरीदार से बात कर लीजिए।",
-        "requirements": {
+        "first_step_english": "This week, ask your nearest Krishi Vigyan Kendra what spawn costs, and line up one buyer.",
+"requirements": {
             "farm_waste": {"min": "some", "weight": CRITICAL},
             "covered_space": {"min": "one_room", "weight": CRITICAL},
             "market_distance": {"min": "moderate", "weight": MODERATE},
@@ -237,7 +249,8 @@ SKILLS = [
         "environmental": "Among the lowest-equipment-cost options in the set, with a clear safe-beginner path (melt-and-pour) built into the trade itself.",
         "resource_keywords": ["oil", "fat", "lye", "soap", "saponification"],
         "first_step_hindi": "इस हफ़्ते तैयार बेस से दस साबुन बनाइए और व्हाट्सएप पर अपने जानने वालों को दिखाइए।",
-        "requirements": {
+        "first_step_english": "This week, make ten soaps from a ready melt-and-pour base and show them to people you know on WhatsApp.",
+"requirements": {
             "cooking_oils": {"min": "some", "weight": CRITICAL},
             "covered_space": {"min": "small_corner", "weight": MODERATE},
             "capital_available": {"min": "under_25k", "weight": LOW},
@@ -262,7 +275,8 @@ SKILLS = [
         "environmental": "Steady, high year-round baseline demand (daily religious/household use) with sharp additional spikes around festivals. India produces over 85% of the world's incense sticks.",
         "resource_keywords": ["bamboo", "incense", "agarbatti", "charcoal", "jigat", "fragrance", "essential oil"],
         "first_step_hindi": "इस हफ़्ते बांस की तीलियों और सुगंध तेल का दाम पता कीजिए, और हाथ से थोड़ी अगरबत्ती बनाकर देखिए।",
-        "requirements": {
+        "first_step_english": "This week, find out what bamboo sticks and fragrance oil cost, and try rolling a few by hand.",
+"requirements": {
             "bamboo_access": {"min": "some", "weight": CRITICAL},
             "capital_available": {"min": "25k_75k", "weight": MODERATE},
             "covered_space": {"min": "small_corner", "weight": MODERATE},

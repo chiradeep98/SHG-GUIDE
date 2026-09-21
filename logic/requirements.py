@@ -224,3 +224,44 @@ def pick_bridging_slots(skills, answers, exclude=(), n=4):
     ]
 
     return slots + shared[:n]
+
+
+def _weighing(assessment):
+    """Total weight of the requirements she has actually answered."""
+    return sum(d["weight"] for d in assessment["details"] if d["status"] != "unknown")
+
+
+def points_lost(assessment):
+    """
+    How many of the 100 points each failing requirement costs her, keyed by slot.
+
+    "Score 41" tells her nothing about what to do. "Cold storage is costing you
+    20 points and milk supply 30" tells her which gap is worth attacking first,
+    and makes the score legible rather than something the app asserts.
+    """
+    total_weight = _weighing(assessment)
+    if not total_weight:
+        return {}
+    return {
+        d["slot"]: round(100 * d["weight"] * (1 - _FACTORS[d["status"]]) / total_weight)
+        for d in assessment["details"]
+        if d["status"] in ("unmet", "partial")
+    }
+
+
+def score_if_fixed(assessment, slots):
+    """
+    The score she would have if the named slots were fully met, everything else
+    unchanged. Drives the "what if you could arrange these" panel — the same
+    arithmetic as assess_skill, not an estimate.
+    """
+    total_weight = _weighing(assessment)
+    if not total_weight:
+        return assessment["score"]
+
+    slots = set(slots)
+    earned = sum(
+        d["weight"] * (1.0 if d["slot"] in slots else _FACTORS[d["status"]])
+        for d in assessment["details"] if d["status"] != "unknown"
+    )
+    return round(100 * earned / total_weight)

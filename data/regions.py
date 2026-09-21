@@ -294,3 +294,98 @@ def known_districts(state):
 
 def _normalise(text):
     return "".join(c for c in text.lower() if c.isalnum())
+
+
+# ---------------------------------------------------------------------------
+# What a district's ODOP product tells us about resources available there.
+#
+# A district is designated for a product because it demonstrably produces it at
+# scale, so the designation is real evidence that the underlying raw material
+# exists locally — a honey district has bee forage, a milk district has a dairy
+# ecosystem, a rice district has straw. That is evidence, not proof: it says
+# the resource exists in the district, not that it is within walking distance
+# of her house. The engine treats it as grounds to offer a sourcing route, not
+# as a substitute for her own answer.
+#
+# Keys are substrings matched case-insensitively against the ODOP product.
+ODOP_EVIDENCE = {
+    # dairy ecosystem -> milk can be bought rather than owned, and collection
+    # centres typically have chilling units
+    "milk": ["livestock_milk", "cold_storage"],
+    "dairy": ["livestock_milk", "cold_storage"],
+    "ghee": ["livestock_milk", "cold_storage"],
+
+    # fruit and vegetable districts -> raw material for pickle
+    "mango": ["seasonal_produce"], "guava": ["seasonal_produce"],
+    "banana": ["seasonal_produce"], "tomato": ["seasonal_produce"],
+    "onion": ["seasonal_produce"], "potato": ["seasonal_produce"],
+    "litchi": ["seasonal_produce"], "jackfruit": ["seasonal_produce"],
+    "pineapple": ["seasonal_produce"], "aonla": ["seasonal_produce"],
+    "garlic": ["seasonal_produce"], "chilli": ["seasonal_produce"],
+    "chilly": ["seasonal_produce"], "pea": ["seasonal_produce"],
+    "strawberry": ["seasonal_produce"], "tamarind": ["seasonal_produce"],
+    "orange": ["seasonal_produce"], "lemon": ["seasonal_produce"],
+    "citrus": ["seasonal_produce"], "vegetable": ["seasonal_produce"],
+    "fruit": ["seasonal_produce"], "spice": ["seasonal_produce"],
+    "turmeric": ["seasonal_produce"], "ginger": ["seasonal_produce"],
+    "amla": ["seasonal_produce"], "cashew": ["seasonal_produce"],
+    "coconut": ["seasonal_produce"],
+    # deliberately unmapped: makhana (foxnut) is a dried snack crop, not
+    # pickling material; fish/marine, petha, mint and bakery likewise tell us
+    # nothing about the ten skills. A district whose ODOP is uninformative
+    # should yield no evidence rather than a loose match.
+
+    # cereal districts -> crop residue is the free substrate for mushroom
+    "rice": ["farm_waste"], "paddy": ["farm_waste"], "wheat": ["farm_waste"],
+    "maize": ["farm_waste"], "millet": ["farm_waste"], "sugarcane": ["farm_waste"],
+    "jaggery": ["farm_waste"], "poha": ["farm_waste"],
+    "mushroom": ["farm_waste"],
+
+    # oilseed districts -> oils and fats for soap
+    "oil seed": ["cooking_oils"], "oilseed": ["cooking_oils"],
+    "groundnut": ["cooking_oils"], "mustard": ["cooking_oils"],
+    "sesame": ["cooking_oils"], "sunflower": ["cooking_oils"],
+
+    # a honey district necessarily has forage and an existing beekeeping trade
+    "honey": ["flowering_land"],
+
+    # textile and handloom districts -> yarn, weavers, and a cloth market
+    "handloom": ["yarn_weavers", "cloth_market"],
+    "textile": ["yarn_weavers", "cloth_market"],
+    "silk": ["yarn_weavers", "cloth_market"],
+    "saree": ["yarn_weavers", "cloth_market"],
+    "cotton": ["yarn_weavers", "cloth_market"],
+    "carpet": ["yarn_weavers", "cloth_market"],
+    "zari": ["yarn_weavers", "cloth_market"],
+
+    # craft districts -> craft raw material and a cluster to sell into
+    "terracotta": ["craft_materials"], "craft": ["craft_materials"],
+    "pottery": ["craft_materials"], "filigree": ["craft_materials"],
+    "brass": ["craft_materials"], "wood": ["craft_materials"],
+    "stone": ["craft_materials"], "bamboo": ["craft_materials", "bamboo_access"],
+    "cane": ["craft_materials", "bamboo_access"],
+
+    # poultry / meat districts
+    "poultry": ["livestock_birds"], "meat": ["livestock_birds"],
+    "egg": ["livestock_birds"],
+}
+
+
+def regional_evidence(state, district):
+    """
+    Which requirement slots the district's ODOP product is evidence for.
+
+    Returns {slot: reason}, empty when we have no data for that district — an
+    unknown district must read as "no evidence", never as "resource absent".
+    """
+    product = odop_for(state, district)
+    if not product:
+        return {}
+
+    found = {}
+    low = product.lower()
+    for keyword, slots in ODOP_EVIDENCE.items():
+        if keyword in low:
+            for slot in slots:
+                found[slot] = product
+    return found
