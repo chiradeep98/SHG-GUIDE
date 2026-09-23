@@ -37,6 +37,23 @@ from data.regions import ODOP_BY_STATE, odop_for, regional_evidence
 
 APP = "app.py"
 T = 90
+# The mirror assembles its reading from several local-model calls, and a cold
+# model costs ~25s on the first of them. Only the Scenario 2 screens need this.
+LLM_T = 300
+
+# A complete reading, in the shape logic/local_llm.read_her_day_locally returns.
+# Used where the point is that a full reading renders, not that the model can
+# produce one — a real model call would make these tests slow and flaky.
+FULL_READING = {
+    "activities": ["milks the buffalo", "stitches clothes", "made mango pickle"],
+    "capability_clusters": ["animal_care", "careful_handwork", "food_handling"],
+    # deliberately includes an id that is not a real skill, to prove it is filtered
+    "candidate_skill_ids": ["pickle", "tailoring", "dairy", "not_a_real_skill"],
+    "mirror_hindi": "आप हर सुबह भैंस का दूध निकालती हैं। आप कपड़े सिलती हैं। आपने अचार बनाया।",
+    "mirror_english": "You milk the buffalo, you stitch, you made pickle.",
+    "first_step_hindi": "इस हफ़्ते चार डिब्बे अचार बनाइए।",
+    "first_step_english": "Make four jars of pickle this week.",
+}
 SKILLS_BY_ID = {s["id"]: s for s in SKILLS}
 
 ANSWERS = {
@@ -48,6 +65,8 @@ ANSWERS = {
     "flowering_land": "no", "bamboo_access": "no", "cloth_market": "some",
     "yarn_weavers": "no", "seasonal_produce": "plenty", "craft_materials": "some",
     "cooking_oils": "some",
+    # the market slots, asked of everyone
+    "local_competition": "a_few", "buyer_pull": "sometimes",
 }
 for _skill, _questions in BESPOKE_QUESTIONS.items():
     for _q in _questions:
@@ -57,7 +76,7 @@ for _skill, _questions in BESPOKE_QUESTIONS.items():
 def click(at, needle, must=True):
     for button in at.button:
         if needle in button.label:
-            button.click().run(timeout=T)
+            button.click().run()   # uses this AppTest's own default_timeout
             return True
     if must:
         raise AssertionError(f"button {needle!r} not found in {[b.label for b in at.button]}")
@@ -78,7 +97,7 @@ def answer_visible_choices(at):
             continue
         slot = key.split("choice_", 1)[1]
         if slot in ANSWERS:
-            control.set_value(ANSWERS[slot]).run(timeout=T)
+            control.set_value(ANSWERS[slot]).run()
             count += 1
     return count
 
@@ -143,9 +162,14 @@ def test_data_integrity():
     print(f"  {len(SKILLS)} skills, {len(SLOT_QUESTIONS)} slots + "
           f"{bank - len(SLOT_QUESTIONS)} bespoke = {bank} questions, all consistent")
 
+    # The ceiling is a bloat alarm, not a target. It went 18 -> 20 when the
+    # market layer added three universal questions (others nearby, people
+    # asking to buy, her PIN code). She is answering these by voice with low
+    # confidence, so the number is a real cost and worth an argument before it
+    # rises again.
     for skill in SKILLS:
         asked = len(set(UNIVERSAL_SLOTS) | set(skill["requirements"])) + len(BESPOKE_QUESTIONS.get(skill["id"], []))
-        assert 10 <= asked <= 18, f"{skill['id']} would ask {asked} questions"
+        assert 10 <= asked <= 20, f"{skill['id']} would ask {asked} questions"
 
 
 # ===================================================================== engine
@@ -220,6 +244,325 @@ def test_requirement_tiers():
 
 
 
+# ============================================================= market layer
+def test_market_layer():
+    """
+    The engine used to answer only "can she make it here" — capital, space,
+    water, raw material — and scored a thin-margin commodity that half her
+    district already sells exactly level with a trade nobody nearby offers.
+    This is the other half: can she sell it, at a profit, against her
+    neighbours.
+    """
+    from data.market import MARKET, PRICE_PRESSURE_SCALE
+    from data.regions import ODOP_BY_STATE, regional_competition
+    from data.market_density import ENTERPRISE_COUNTS
+    from logic.market import assess_market, district_density
+    by_id = {s["id"]: s for s in SKILLS}
+
+    assert set(MARKET) == {s["id"] for s in SKILLS}, "every skill needs a market profile"
+
+    # --- the district data has to be real, not placeholder
+    covered = sum(len(d["districts"]) for d in ENTERPRISE_COUNTS.values())
+    assert covered >= 215, f"only {covered} districts carry an enterprise count"
+
+    # A district whose registry spelling was never found must stay absent. The
+    # tempting "fix" for Nanded is NANDURBAR, which does return a count — for a
+    # different district at the other end of the state. Borrowed data would be
+    # worse than none, because nothing downstream could tell it was borrowed.
+    assert district_density("Maharashtra", "Nanded") is None, \
+        "Nanded has no confirmed registry spelling and must not carry a figure"
+    assert district_density("Maharashtra", "Pune")[0] > 500_000, "Pune should be dense"
+    assert district_density("Bihar", "Arwal")[0] < 20_000, "Arwal should be thin"
+    # an unknown district must read as "no figure", never as a thin market
+    assert district_density("Bihar", "Nowhere") is None
+
+    # --- the PDF transcription split multi-word district names; the product
+    # name was mangled for eleven districts and the registry lookup missed all
+    # of them. These are the de-merged rows.
+    assert odop_for("Bihar", "East Champaran") == "Litchi"
+    assert odop_for("Uttar Pradesh", "Rae Bareli") == "Aonla"
+    assert odop_for("Uttar Pradesh", "Kanpur Nagar") == "Bakery Products"
+    for state, districts in ODOP_BY_STATE.items():
+        for name, product in districts.items():
+            assert not product.startswith("("), f"{name}: stray bracket in {product!r}"
+            assert len(name.split()) <= 3, f"{name!r} looks like a name/product merge"
+
+    # --- the ODOP fact read as competition, not only as supply
+    assert regional_competition("Kerala", "Wayanad", "dairy"), \
+        "Wayanad is a milk district — that is competition for a dairy seller"
+    assert not regional_competition("Kerala", "Wayanad", "tailoring"), \
+        "a milk district says nothing about tailoring"
+
+    # ...and it must cost her, in a commodity trade, where it did not before
+    same = {"local_competition": "many", "buyer_pull": "sometimes", "stage": "started"}
+    crowded = assess_market(by_id["dairy"], {**same, "state": "Kerala", "district_area": "Wayanad"})
+    clear = assess_market(by_id["dairy"], {**same, "state": "Bihar", "district_area": "Araria"})
+    assert crowded["crowded_for_her_trade"] and not clear["crowded_for_her_trade"]
+    assert crowded["score"] < clear["score"], \
+        f"selling milk in a milk district must not score better ({crowded['score']} vs {clear['score']})"
+
+    # --- "others nearby" is not equally bad in every trade. That is the whole
+    # point: in a commodity the next seller takes her income, in a craft he
+    # brings her a buyer. Measured as how far the *same* trade moves between
+    # "no one nearby" and "many nearby", because comparing two trades' totals
+    # would mix in everything else that differs between them.
+    where = {"state": "Bihar", "district_area": "Gaya", "stage": "started",
+             "buyer_pull": "sometimes"}
+
+    def crowding_cost(skill_id):
+        alone = assess_market(by_id[skill_id], {**where, "local_competition": "none"})
+        crowd = assess_market(by_id[skill_id], {**where, "local_competition": "many"})
+        return alone["score"] - crowd["score"]
+
+    for commodity in ("agarbatti", "dairy", "poultry"):
+        for differentiated in ("handcraft", "tailoring"):
+            assert crowding_cost(commodity) > crowding_cost(differentiated), (
+                f"neighbours should cost {commodity} (a commodity) more than "
+                f"{differentiated}: {crowding_cost(commodity)} vs {crowding_cost(differentiated)}"
+            )
+    assert {m["price_pressure"] for m in MARKET.values()} <= set(PRICE_PRESSURE_SCALE)
+    print(f"  neighbours cost a commodity {crowding_cost('agarbatti')} points and a "
+          f"differentiated trade {crowding_cost('handcraft')}")
+
+    # --- and it has to separate skills that production cannot tell apart
+    ready = {"state": "Bihar", "district_area": "Gaya", "stage": "started",
+             "capital_available": "25k_75k", "market_distance": "moderate",
+             "covered_space": "one_room", "daily_hours": "4_to_8", "water_access": "yes",
+             "electricity_reliability": "mostly_reliable", "helpers_available": "one_or_two",
+             "training_access": "yes", "farm_waste": "plenty", "craft_materials": "some",
+             "cooking_oils": "some", "seasonal_produce": "some", "bamboo_access": "some",
+             "cloth_market": "some", "local_competition": "many", "buyer_pull": "sometimes"}
+    shortlist, _e, _f = shortlist_with_remedies(SKILLS, ready, SCHEMES, n=10)
+    make = {r["skill_id"]: r["score"] for r in shortlist}
+    sell = {r["skill_id"]: r["market"]["score"] for r in shortlist}
+    assert len(set(make.values())) <= 3, "this profile is meant to be near-uniform on production"
+    assert max(sell.values()) - min(sell.values()) >= 25, \
+        f"the market reading barely separates anything: {sell}"
+
+    # Gaya's ODOP is mushroom and she says many neighbours sell it, so mushroom
+    # must not top a list where production cannot tell the trades apart.
+    assert shortlist[0]["skill_id"] != "mushroom", \
+        f"the district's own crowded product led the shortlist: {[r['skill_id'] for r in shortlist]}"
+
+    # each factor must explain itself. These used to all carry the trade's one
+    # summary sentence, so the panel showed the same paragraph under three
+    # different headings and she could not tell which factor was the problem.
+    reading = assess_market(by_id["dairy"], {**same, "state": "Kerala", "district_area": "Wayanad"})
+    sentences = [f["english"] for f in reading["factors"]]
+    assert len(set(sentences)) == len(sentences), \
+        f"a factor is reusing another's wording: {len(set(sentences))} texts for {len(sentences)} factors"
+    assert all(f["hindi"] and f["english"] for f in reading["factors"]), "a factor lost its words"
+
+    # --- the pincode layer: a real count of her trade in her own area, which is
+    # the only signal here that is both local and not self-reported.
+    from logic.local_market import local_competition, trade_counts
+    from data.nic_trades import NIC_BY_SKILL
+
+    # mushroom has no NIC code anywhere in the registry. That must read as
+    # "we cannot see this trade", never as "nobody nearby does it" — a zero
+    # would tell her she has no competition in the one trade we cannot count.
+    assert "mushroom" not in NIC_BY_SKILL
+    assert local_competition("854311", "mushroom") is None
+    # ...and the market reading must simply drop the factor rather than score it
+    no_code = assess_market(by_id["mushroom"], {**same, "state": "Bihar",
+                                                "district_area": "Araria", "pincode": "854311"})
+    assert not any(f["key"] == "registry_competition" for f in no_code["factors"])
+
+    # a missing or malformed pincode is also "unknown", not "empty"
+    for bad in (None, "", "12", "abcdef", "8543111"):
+        assert local_competition(bad, "dairy") is None, f"{bad!r} should not resolve"
+
+    # the real lookup, from the cache written by the live fetch
+    got = local_competition("854311", "dairy")
+    if got:   # skipped when no API key is configured
+        assert got["count"] > 0 and got["scanned"] > 1000, got
+        crowded = assess_market(by_id["dairy"], {**same, "state": "Bihar",
+                                                 "district_area": "Araria", "pincode": "854311"})
+        blind = assess_market(by_id["dairy"], {**same, "state": "Bihar", "district_area": "Araria"})
+        assert crowded["score"] < blind["score"], (
+            f"53 registered dairy businesses in her pincode should lower the "
+            f"reading, not raise it: {crowded['score']} vs {blind['score']}")
+        counted = next(f for f in crowded["factors"] if f["key"] == "registry_competition")
+        assert str(got["count"]) in counted["english"], "the count must be named, not just scored"
+        assert "854311" in counted["english"], "the message should name her own PIN code"
+        print(f"  pincode 854311: {got['count']} registered dairy businesses of "
+              f"{got['scanned']:,}, and the reading drops {blind['score']}->{crowded['score']}")
+
+    # The market must reach the *final* recommendation order, not only the
+    # shortlist. The tilt used to live in shortlist_with_remedies(), so the
+    # screen that ranks the validated options called assess_with_remedies()
+    # directly and ordered them on production and coverage alone — the whole
+    # market layer had no say in what she was finally told to do.
+    level = {"state": "Bihar", "district_area": "Bhagalpur", "district_confirmed": "Bhagalpur",
+             "stage": "started", "capital_available": "25k_75k", "market_distance": "moderate",
+             "covered_space": "one_room", "daily_hours": "4_to_8", "cloth_market": "some",
+             "seasonal_produce": "some", "craft_materials": "some", "water_access": "yes",
+             "helpers_available": "one_or_two", "training_access": "yes",
+             "electricity_reliability": "mostly_reliable",
+             "local_competition": "many", "buyer_pull": "sometimes"}
+    for _sid in ("handcraft", "tailoring", "pickle"):
+        for _q in BESPOKE_QUESTIONS.get(_sid, []):
+            level[_q["id"]] = _q["scale"][-1]
+
+    ranked = sorted(
+        (assess_with_remedies(by_id[s], level, SCHEMES) for s in ("handcraft", "tailoring", "pickle")),
+        key=lambda r: -r["ranking_score"])
+    assert len({r["score"] for r in ranked}) == 1, \
+        "this fixture is meant to be level on production so the market decides"
+    sells = [r["market"]["score"] for r in ranked]
+    assert sells == sorted(sells, reverse=True), (
+        f"three trades she is equally able to make were not ordered by market: "
+        f"{[(r['skill_id'], r['market']['score']) for r in ranked]}")
+    print(f"  with production level, the order follows the market: "
+          f"{', '.join(f'{r[chr(39)+chr(39)] if False else r['skill_id']} {r['market']['score']}' for r in ranked)}")
+
+    # market must never eliminate — a thin market changes the plan, not the verdict
+    for r in shortlist:
+        if r["market"] and not r["market"]["healthy"]:
+            assert not r["eliminated"], f"{r['skill_id']} was eliminated on market grounds"
+    print(f"  {covered} districts of real Udyam data; market spread "
+          f"{min(sell.values())}-{max(sell.values())} where production spread is "
+          f"{min(make.values())}-{max(make.values())}")
+
+
+# ================================================================ mandi prices
+def test_mandi_prices():
+    """
+    The feed's own filters hand back other states' rows, so every row is
+    checked against her district before it reaches her.
+    """
+    from logic.mandi import prices_for, _todays_feed, api_key, COMMODITY_TRADES
+
+    if not api_key():
+        print("  no data.gov.in key — skipped")
+        return
+    feed = _todays_feed(api_key())
+    if feed is None:
+        print("  mandi feed unreachable — skipped")
+        return
+
+    # Asking for a district in the wrong state must return nothing, however the
+    # API answers. filters[state]="Uttar Pradesh" once returned 29 rows of which
+    # 26 were Andhra Pradesh; Guntur is an Andhra district.
+    assert prices_for("Uttar Pradesh", "Guntur", "pickle") is None, \
+        "a row from another state reached a district it does not belong to"
+
+    # ...and where there are rows, every one of them is hers
+    checked = 0
+    for row in feed[:400]:
+        state, district = row.get("state"), row.get("district")
+        ours = {v: k for k, v in {"Kerala": "Keralam"}.items()}.get(state, state)
+        for skill_id in COMMODITY_TRADES:
+            got = prices_for(ours, district, skill_id)
+            for hit in got or []:
+                assert hit["commodity"], hit
+                checked += 1
+    print(f"  {len(feed)} rows in today's feed; {checked} matched rows all from the asked-for district")
+
+    # a trade with no mandi inputs must not claim any
+    assert prices_for("Kerala", "Idukki", "tailoring") is None
+
+    # The archive fills in where today's feed is silent, which is most districts
+    # most days — but only with prices recent enough to mean something. Some
+    # districts stopped reporting years ago, and a 2023 cauliflower rate shown
+    # beside yesterday's garlic reads as current when it is not.
+    from logic.mandi import MAX_PRICE_AGE_DAYS, _age_in_days
+    try:
+        from data.mandi_prices import MANDI_PRICES
+    except ImportError:
+        MANDI_PRICES = {}
+    if MANDI_PRICES:
+        shown = stale = 0
+        for state, districts in MANDI_PRICES.items():
+            for district in districts:
+                for skill_id in COMMODITY_TRADES:
+                    for row in prices_for(state, district, skill_id) or []:
+                        shown += 1
+                        age = _age_in_days(row["date"])
+                        if age is None or age > MAX_PRICE_AGE_DAYS:
+                            stale += 1
+        assert not stale, f"{stale} of {shown} prices shown are older than a year"
+        covered = sum(len(v) for v in MANDI_PRICES.values())
+        print(f"  archive covers {covered} districts; {shown} prices shown, none stale")
+
+
+# ================================================================ SHG density
+def test_shg_layer():
+    """
+    Advice that rests on her group should name her district's actual groups.
+
+    Half the remedy engine says some version of "your group can help with
+    this". That is sound and it is also unverified — it asserts something about
+    her district without ever checking. This layer checks.
+    """
+    import logic.shg as shg_module
+    from logic.shg import group_strength_note, shg_for
+
+    if not shg_module.SHG_BY_DISTRICT:
+        print("  data/shg_density.py not generated yet — skipped")
+        return
+
+    covered = sum(len(v) for v in shg_module.SHG_BY_DISTRICT.values())
+    assert covered >= 100, f"only {covered} districts have SHG figures"
+
+    # a district we have no figures for must read as unknown, not as empty
+    assert shg_for("Bihar", "Nowhere") is None
+    assert group_strength_note("Bihar", "Nowhere") is None
+
+    # The two figures have to describe the same thing. Members and groups are
+    # summed over the same villages — those reporting a group — because a great
+    # many rows carry members with shg=0, and mixing them gave Kasargod 25
+    # groups against 2,834 members. That is 113 women per group, which is not a
+    # self-help group; it is two different quantities added together. An SHG is
+    # roughly 10-20 women, so anything far outside that means the aggregation
+    # has drifted apart again.
+    worst = None
+    for state, districts in shg_module.SHG_BY_DISTRICT.items():
+        for name, row in districts.items():
+            if not row["shgs"]:
+                continue
+            per_group = row["members"] / row["shgs"]
+            assert 2 <= per_group <= 40, (
+                f"{state}/{name}: {row['members']:,} members across {row['shgs']:,} "
+                f"groups is {per_group:.0f} per group — the two sums no longer "
+                f"describe the same villages")
+            if worst is None or abs(per_group - 12) > abs(worst[1] - 12):
+                worst = (f"{state}/{name}", per_group)
+    print(f"  members per group stays plausible everywhere "
+          f"(furthest from typical: {worst[0]} at {worst[1]:.0f})")
+
+    sample = next((d for d in shg_module.SHG_BY_DISTRICT.get("Bihar", {})), None)
+    if sample:
+        row = shg_for("Bihar", sample)
+        assert row["shgs"] > 0 and row["members"] > row["shgs"], row
+        note = group_strength_note("Bihar", sample)
+        assert note and str(row["shgs"]) in note[1].replace(",", "") or note
+        print(f"  {covered} districts; {sample}: {row['shgs']:,} groups, "
+              f"{row['members']:,} members, reach {row['reach']:.0%}")
+
+    # the group figures must reach the advice that depends on them, and only that
+    prof = {"state": "Bihar", "district_area": sample, "district_confirmed": sample,
+            "stage": "started"}
+    grouped = find_remedy("helpers_available", prof, SCHEMES, "Dairy", "dairy")
+    assert "groups" in grouped["english"], grouped["english"]
+    money = find_remedy("capital_available", prof, SCHEMES, "Dairy", "dairy")
+    assert "self-help groups with" not in money["english"], \
+        "the group figures leaked into advice that has nothing to do with the group"
+    # ...and they are stated once. Weaving has two gaps whose answer is the
+    # group, and both cards used to end with the identical district figure.
+    from logic.remedies import assess_with_remedies as _assess
+    weaving = next(s for s in SKILLS if s["id"] == "weaving")
+    gappy = {"state": "Bihar", "district_area": "Bhagalpur", "district_confirmed": "Bhagalpur",
+             "stage": "started", "helpers_available": "none", "yarn_weavers": "no",
+             "weaving_preloom_help": "no", "capital_available": "under_25k",
+             "market_distance": "far", "covered_space": "none"}
+    texts = [d["remedy"]["english"] for d in _assess(weaving, gappy, SCHEMES)["details"]
+             if d.get("remedy")]
+    repeats = sum(1 for t in texts if "such groups" in t)
+    assert repeats <= 1, f"the district group figure was stated {repeats} times on one screen"
+    print(f"  group figures reach the group advice, and nothing else, stated once")
+
+
 # ======================================================== the failure summary
 def test_failure_summary():
     """
@@ -270,9 +613,20 @@ def test_failure_summary():
     at.run(timeout=T)
     assert not at.exception, at.exception
 
+    # The screen is split into tabs so she is not scrolling through the
+    # requirement list, the market reading, the reasons and every remedy one
+    # after another before she reaches anything she can act on.
     labels = [t.label for t in at.tabs]
-    assert any("Blocking" in l for l in labels) and any("arranged" in l for l in labels), labels
+    assert any("What it needs" in l for l in labels), labels
+    assert any("Market" in l for l in labels), labels
+    assert any("Ways forward" in l for l in labels), labels
     assert at.checkbox, "the what-if panel offered nothing to tick"
+
+    # the requirement list is a table now, not a dozen stacked text blocks
+    assert at.dataframe, "the requirement breakdown table is missing"
+    frame = at.dataframe[0].value
+    assert len(frame) == len(a["details"]), "the table dropped requirements"
+    assert "असर / Points lost" in frame.columns, list(frame.columns)
 
     # ticking the two heaviest gaps must move the score and flip the verdict
     heaviest = sorted(lost, key=lambda s: -lost[s])[:2]
@@ -284,9 +638,12 @@ def test_failure_summary():
     bars = [p.value for p in at.get("progress")]
     assert max(bars) > a["score"], f"the what-if score did not move: {bars}"
 
-    # ...and the old detail is still on the page, not replaced by the summary
+    # ...and nothing was lost in the restyling: the difficulty is still named
+    # and the remedies are still there, just behind a tab rather than below
+    # three screens of text.
     text = " ".join(w.value for w in at.markdown)
-    assert "मुख्य दिक्कत" in text, "the original difficulty line was dropped"
+    warned = " ".join(w.value for w in at.warning)
+    assert "मुख्य दिक्कत" in warned or "मुख्य दिक्कत" in text, "the difficulty line was dropped"
     assert "How your gaps can be filled" in text, "the remedy cards were dropped"
     print(f"  screen shows {len(labels)} tabs, {len(at.checkbox)} what-if gaps, and keeps the old detail")
 
@@ -449,7 +806,7 @@ def test_regional_remedies():
 # ================================================================ scenario 1
 def test_scenario_1_and_question_persistence():
     stub_mic({"skill_voice_input": "मेरे पास दो गाय हैं"})
-    at = AppTest.from_file(APP).run(timeout=T)
+    at = AppTest.from_file(APP, default_timeout=T).run()
     click(at, "यह चुनें / Select")
     assert at.session_state["step"] == "skill_voice"
 
@@ -530,11 +887,14 @@ def test_scenario_2_discovery(fake_reading=None, variant=""):
     }
     stub_mic(spoken)
 
+    from logic import local_llm
+    real_reader = local_llm.read_her_day_locally
     if fake_reading is not None:
-        import logic.llm as llm
-        llm.read_her_day = lambda *a, **k: fake_reading
+        # The app reads the mirror from the local model now, not OpenRouter, so
+        # that is what a test of "a full reading renders correctly" must stub.
+        local_llm.read_her_day_locally = lambda *a, **k: fake_reading
 
-    at = AppTest.from_file(APP).run(timeout=T)
+    at = AppTest.from_file(APP, default_timeout=LLM_T).run(timeout=LLM_T)
     click(at, "यह चुनें Select")
     assert at.session_state["step"] == "confidence_before"
 
@@ -559,10 +919,18 @@ def test_scenario_2_discovery(fake_reading=None, variant=""):
     reading = at.session_state["profile"].get("skill_reading")
     print(f"  LLM reading used: {reading is not None}")
     if reading:
-        # the reflection, its reasoning, and a correction path must all be present
-        assert any("हुनर" in m.value for m in at.markdown), "capability clusters not shown"
+        # However the reading was produced, she must be able to say it is wrong
+        # about her. That matters more for a weaker model, not less.
         assert has_button(at, "This isn't right about me"), "no way to correct a misread"
-        print("  clusters shown and a correction path offered")
+        # The reasoning is shown when the reading carries it. The local model's
+        # reading deliberately does not: it writes the reflection and leaves
+        # every list empty rather than inventing capabilities it did not infer.
+        if reading.get("capability_clusters"):
+            assert any("हुनर" in m.value for m in at.markdown), "capability clusters not shown"
+            print("  clusters shown and a correction path offered")
+        else:
+            assert reading["mirror_hindi"], "a reading with no clusters must still have words"
+            print("  reflection-only reading (local model), correction path offered")
 
     pills = at.pills[0]
     offered = list(pills.options)
@@ -573,6 +941,7 @@ def test_scenario_2_discovery(fake_reading=None, variant=""):
     picked = at.session_state["profile"]["discovery_candidate_ids"]
     assert picked and all(i in SKILLS_BY_ID for i in picked), f"bad candidate ids: {picked}"
     print(f"  offered {len(offered)}, she picked {picked}")
+    local_llm.read_her_day_locally = real_reader
 
     assert at.session_state["step"] == "universal_slots"
     answer_visible_choices(at)
@@ -605,9 +974,11 @@ def test_mirror_correction_path(fake_reading):
     spoken = {"voice_day_morning": "मैं सुबह भैंस का दूध निकालती हूं"}
     stub_mic(spoken)
     import logic.llm as llm
-    llm.read_her_day = lambda *a, **k: fake_reading
+    from logic import local_llm
+    real_reader = local_llm.read_her_day_locally
+    local_llm.read_her_day_locally = lambda *a, **k: fake_reading
 
-    at = AppTest.from_file(APP).run(timeout=T)
+    at = AppTest.from_file(APP, default_timeout=LLM_T).run(timeout=LLM_T)
     click(at, "यह चुनें Select")
     at.segmented_control(key="confidence_before_choice").set_value("maybe").run(timeout=T)
     click(at, "Go ahead")
@@ -626,46 +997,131 @@ def test_mirror_correction_path(fake_reading):
     assert not at.session_state["profile"].get("skill_reading"), \
         "the rejected reading must be cleared so it is re-read, not re-shown"
     assert not at.exception, at.exception
+    local_llm.read_her_day_locally = real_reader
     print("  rejected reading cleared and she is back at the day questions")
 
 
 # ====================================================== translation failure
+def test_local_model_is_a_safety_net():
+    """
+    The model on this machine catches the two failures that used to leave her
+    stuck: MyMemory's daily quota and an OpenRouter balance of zero.
+
+    Skipped when Ollama is not running, because the point of a fallback is that
+    the app works without it too.
+    """
+    from logic import local_llm
+    from logic.llm import SkillReading, looks_untranslated, CAPABILITY_CLUSTERS
+
+    if not local_llm.available():
+        print("  no local model on this machine — skipped")
+        return
+
+    english = local_llm.translate_to_english("मेरे पास दो भैंस हैं")
+    assert english and not looks_untranslated(english), english
+    assert "milk" in english.lower() or "buffal" in english.lower() or "cow" in english.lower(), english
+
+    # The mirror reading has to be the same shape logic/llm.py returns, or the
+    # screen that renders it will KeyError on a day the balance runs out —
+    # which is exactly the day it is needed.
+    # The mirror is assembled from small tasks, each checked. The invention
+    # guard is the important one: asked three times what a woman with two
+    # buffalo does, one run added "waters the cow" and "cleans the sewing
+    # machine". She has no cow. A mirror that invents her life is worse than no
+    # mirror, so every line has to come from her own words.
+    narrative = ("सुबह उठकर मैं दो भैंसों का दूध निकालती हूं और पड़ोस में बेचती हूं। "
+                 "दोपहर में सिलाई करती हूं। पिछले हफ़्ते आम का अचार बनाया था।")
+    for invented in ("गाय को पानी पिलाती हूं", "सिलाई मशीन को साफ करती हूं",
+                     "अचार को पैक करती हूं", "बच्चों को स्कूल भेजती हूं"):
+        assert not local_llm._said_it_herself(invented, narrative), \
+            f"an invented line passed the guard: {invented}"
+    for hers in ("दोपहर में सिलाई करती हूं", "पड़ोस में बेचती हूं"):
+        assert local_llm._said_it_herself(hers, narrative), \
+            f"her own words were rejected: {hers}"
+
+    # capability clusters are a pick from a fixed menu, never free generation
+    picked = local_llm._pick_capabilities(narrative)
+    assert all(c in CAPABILITY_CLUSTERS for c in picked), f"invented a cluster: {picked}"
+    assert picked, "the model picked no capabilities at all"
+
+    reading = local_llm.read_her_day_locally(narrative, SKILLS)
+    assert reading, "the local model produced no reading"
+    assert set(reading) == set(SkillReading.model_fields), (
+        f"shape differs from Claude's: {sorted(set(reading) ^ set(SkillReading.model_fields))}")
+    assert reading["mirror_hindi"], "the reflection is the one thing it must produce"
+    # ...and it must not invent skills. A hallucinated id would show her a trade
+    # she never mentioned as though we had recognised it in her own words.
+    assert reading["candidate_skill_ids"] == [], "the local model must not guess skills"
+    assert all(local_llm._said_it_herself(a, narrative) for a in reading["activities"]), \
+        f"an unverified activity reached the reading: {reading['activities']}"
+    print(f"  local model: {len(reading['activities'])} verified activities, "
+          f"{len(reading['capability_clusters'])} capabilities, reflection ok")
+
+
 def test_translation_failure_degrades():
     """
-    MyMemory is the only translator, so its quota error is the whole failure
-    mode — there is no second service to fall through to.
+    Two different failures, two different right answers.
+
+    With a model on this machine, MyMemory's quota wall is survivable: the
+    local model translates and she never learns anything went wrong. With no
+    local model either, the screen must still show her own words and say
+    plainly what is stuck — the bug this guards against had it render nothing
+    at all, so a translation outage looked like a broken microphone.
     """
     import deep_translator
+    import streamlit as st
+    from logic import local_llm
 
     def boom(*a, **k):
         raise Exception("TooManyRequests: quota exhausted")
 
     deep_translator.MyMemoryTranslator.translate = boom
-    stub_mic({"skill_voice_input": "मेरे पास दो गाय हैं"})
 
-    at = AppTest.from_file(APP).run(timeout=T)
-    click(at, "यह चुनें / Select")
-    at.run(timeout=T)
-    assert not at.exception, f"a translation failure still crashes the screen:\n{at.exception}"
+    # @st.cache_data is process-global, not per-AppTest, so a translation any
+    # earlier test produced for this same Hindi is still sitting in it and would
+    # be served here — making a test of the failure path silently test the happy
+    # one. Session state is per-AppTest and needs no clearing; the cache does.
+    st.cache_data.clear()
 
-    # reruns must stay clean — the half-written state used to KeyError forever
-    at.run(timeout=T)
-    at.run(timeout=T)
-    assert not at.exception, "rerun after a failed translation crashes"
+    def run_once():
+        stub_mic({"skill_voice_input": "मेरे पास दो गाय हैं"})
+        at = AppTest.from_file(APP, default_timeout=T).run()
+        click(at, "यह चुनें / Select")
+        at.run(timeout=T)
+        assert not at.exception, f"a translation failure crashes the screen:\n{at.exception}"
+        # reruns must stay clean — the half-written state used to KeyError forever
+        at.run(timeout=T)
+        at.run(timeout=T)
+        assert not at.exception, "rerun after a failed translation crashes"
+        return at
 
-    # ...and she must still see her own words. Showing the transcript used to be
-    # gated on the English, so a translation outage silently swallowed the Hindi
-    # too and the screen came back blank — it looked like the mic had failed.
-    said = [w.value for w in at.markdown if "आपने कहा" in w.value]
-    assert said, "her Hindi transcript disappeared when the translation failed"
-    assert at.warning, "a failed translation must say so rather than go quiet"
+    # --- with the local model as the safety net
+    if local_llm.available():
+        at = run_once()
+        english = at.session_state["profile"].get("voice_description_en")
+        assert english, "the local model should have rescued the translation"
+        assert not at.warning, "a rescued translation should not warn her about anything"
+        print(f"  MyMemory down, local model caught it: {english[:46]!r}")
 
-    # The advice has to match the failure: a momentary rate limit clears if she
-    # speaks again, the day's quota does not. Whichever it is, the message must
-    # not be the generic one that tells her to retry regardless.
-    warned = " ".join(w.value for w in at.warning)
-    assert warned.strip(), "the warning was empty"
-    print("  no crash, reruns stay clean, and her Hindi is still shown")
+    # --- and with nothing to fall back on
+    real_available = local_llm.available
+    local_llm.available = lambda: False
+    real_translate = local_llm.translate_to_english
+    local_llm.translate_to_english = lambda *a, **k: None
+    try:
+        st.cache_data.clear()
+        at = run_once()
+        assert not at.session_state["profile"].get("voice_description_en")
+        # ...and she must still see her own words. Showing the transcript used to
+        # be gated on the English, so an outage swallowed the Hindi too and the
+        # screen came back blank — it looked like the mic had failed.
+        said = [w.value for w in at.markdown if "आपने कहा" in w.value]
+        assert said, "her Hindi transcript disappeared when the translation failed"
+        assert at.warning, "with no fallback left, the screen must say what is stuck"
+    finally:
+        local_llm.available = real_available
+        local_llm.translate_to_english = real_translate
+    print("  with no fallback at all, her Hindi still shows and the screen says why")
 
 
 if __name__ == "__main__":
@@ -673,6 +1129,15 @@ if __name__ == "__main__":
 
     print("data integrity")
     test_data_integrity()
+
+    print("\nmarket layer")
+    test_market_layer()
+
+    print("\nmandi prices")
+    test_mandi_prices()
+
+    print("\nSHG density")
+    test_shg_layer()
 
     print("\nfailure summary")
     test_failure_summary()
@@ -686,35 +1151,28 @@ if __name__ == "__main__":
     print("\nscenario 1 + question persistence")
     test_scenario_1_and_question_persistence()
 
-    print("\nscenario 2 (no LLM — deterministic fallback)")
+    print("\nscenario 2 (real local model)")
     test_scenario_2_discovery()
 
-    print("\nscenario 2 (faked Claude reading)")
+    print("\nscenario 2 (full reading, model stubbed)")
     test_scenario_2_discovery(
-        fake_reading=llm.SkillReading(
-            activities=["milks the buffalo", "stitches clothes", "made mango pickle"],
-            capability_clusters=["animal_care", "careful_handwork", "food_handling"],
-            candidate_skill_ids=["pickle", "tailoring", "dairy", "not_a_real_skill"],
-            mirror_hindi="आप हर सुबह भैंस का दूध निकालती हैं। आप कपड़े सिलती हैं। आपने अचार बनाया।",
-            mirror_english="You milk the buffalo, you stitch, you made pickle.",
-            first_step_hindi="इस हफ़्ते चार डिब्बे अचार बनाइए।",
-            first_step_english="Make four jars of pickle this week.",
-        ),
+        fake_reading=FULL_READING,
         variant=" और बागवानी भी",  # st.cache_data is global; vary the input
     )
 
     print("\nmirror correction path")
-    test_mirror_correction_path(
-        llm.SkillReading(
-            activities=["milks the buffalo"],
-            capability_clusters=["animal_care"],
-            candidate_skill_ids=["dairy"],
-            mirror_hindi="आप भैंस का दूध निकालती हैं।",
-            mirror_english="You milk the buffalo.",
-            first_step_hindi="इस हफ़्ते दूध बेचकर देखिए।",
-            first_step_english="Try selling milk this week.",
-        )
-    )
+    test_mirror_correction_path({
+        "activities": ["milks the buffalo"],
+        "capability_clusters": ["animal_care"],
+        "candidate_skill_ids": ["dairy"],
+        "mirror_hindi": "आप भैंस का दूध निकालती हैं।",
+        "mirror_english": "You milk the buffalo.",
+        "first_step_hindi": "इस हफ़्ते दूध बेचकर देखिए।",
+        "first_step_english": "Try selling milk this week.",
+    })
+
+    print("\nlocal model safety net")
+    test_local_model_is_a_safety_net()
 
     print("\ntranslation failure")
     test_translation_failure_degrades()

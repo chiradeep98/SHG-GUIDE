@@ -21,6 +21,16 @@ https://mofpi.gov.in/sites/default/files/odop_list_of_35_states_and_uts.pdf
 Every value below is transcribed from that document. Nothing here is inferred
 or generated — a fabricated district figure would be worse than having none,
 because the whole point of this layer is that it is real.
+
+Eleven rows are de-merged rather than transcribed literally. The PDF's column
+layout split multi-word district names, gluing the tail of the name onto the
+front of the product — "East" / "Champaran Litchi" for East Champaran/Litchi,
+"Rae" / "Bareli Aonla" for Rae Bareli/Aonla, and so on. Both halves were sitting
+in the row, so putting them back is not a guess. Fuzzy matching had been hiding
+this: odop_for("Bihar", "East Champaran") resolved to the "East" row and the
+evidence keywords still matched, so only the product name she was shown was
+wrong — until the Udyam lookup in scripts/fetch_market_density.py queried the
+registry by district key and came back empty for every one of them.
 """
 
 # district -> the district's official ODOP product, per state
@@ -35,7 +45,7 @@ ODOP_BY_STATE = {
         "Bhojpur": "Pea",
         "Buxar": "Mentha",
         "Darbhanga": "Makhana (Foxnut)",
-        "East": "Champaran Litchi",
+        "East Champaran": "Litchi",
         "Gaya": "Mushroom",
         "Gopalganj": "Papaya",
         "Jamui": "Jackfruit",
@@ -63,14 +73,14 @@ ODOP_BY_STATE = {
         "Siwan": "Mentha",
         "Supaul": "Makhana (Foxnut)",
         "Vaishali": "Honey",
-        "West": "Champaran Sugarcane Products",
+        "West Champaran": "Sugarcane Products",
     },
     "Odisha": {
         "Angul": "Fruit Based Products (Mango)",
         "Balasore": "Fish Based Products",
         "Bargarh": "Oil seed Based Products (Groundnut)",
         "Bhadrak": "Fish Based Products",
-        "Bolangir": "(Milk Based Products)",
+        "Bolangir": "Milk Based Products",
         "Boudh": "Dal Processing",
         "Cuttack": "Milk Based Products",
         "Deogarh": "Tamarind Based Products",
@@ -115,7 +125,7 @@ ODOP_BY_STATE = {
         "Ganganagar": "Kinnow",
         "Hanumangarh": "Wheat- Noodles, Pasta, & Similar wheat cereaal based",
         "Jaipur": "Tomato",
-        "Jaisalmer Nutritive Xerophytic fruits Kair, Sangari": "widely used",
+        "Jaisalmer": "Nutritive Xerophytic fruits (Kair, Sangari)",
         "Jalore": "Isabgol",
         "Jhalawar": "Orange",
         "Jhunjhunu": "Fruit based products (lemon)",
@@ -125,7 +135,7 @@ ODOP_BY_STATE = {
         "Nagaur": "Fenugreek",
         "Pali": "Milk Based Products",
         "Pratapgarh": "Garlic",
-        "Sawai": "Madhopur Guava",
+        "Sawai Madhopur": "Guava",
         "Sikar": "Onion",
         "Sirohi": "Fennel- Cleaning, grading, sorting and packaging for seasoning,",
         "Tonk": "Mustard based products",
@@ -165,7 +175,7 @@ ODOP_BY_STATE = {
         "Kolhapur": "Sugarcane Products (Jaggery etc.)",
         "Latur": "Tomato",
         "Mumbai": "Marine Products (Fish, Shrimp etc.)",
-        "Mumbai-": "Suburban Marine Products (Fish, Shrimp etc.)",
+        "Mumbai Suburban": "Marine Products (Fish, Shrimp etc.)",
         "Nagpur": "Mandarin Orange",
         "Nanded": "Spice based products (Turmeric, Chilly- Powder etc.)",
         "Nandurbar": "Millet based products (Hill Millet, Finger Millet etc.- Flour/",
@@ -227,11 +237,11 @@ ODOP_BY_STATE = {
         "Jaunpur": "Milk Products",
         "Jhansi": "Basil",
         "Kannauj": "Potato",
-        "Kanpur": "Nagar Bakery Products",
+        "Kanpur Nagar": "Bakery Products",
         "Kasganj": "Ghee",
         "Kaushambi": "Guava",
         "Kushinagar": "Banana",
-        "Lakhimpur": "Khiri Banana",
+        "Lakhimpur Kheri": "Banana",
         "Lalitpur": "Turmeric",
         "Lucknow": "Mango",
         "Maharajganj": "Rice (Kala Namak Vr.)",
@@ -246,15 +256,15 @@ ODOP_BY_STATE = {
         "Pilibhit": "Jaggery",
         "Pratapgarh": "Aonla",
         "Prayagraj": "Guava",
-        "Rae": "Bareli Aonla",
+        "Rae Bareli": "Aonla",
         "Rampur": "Mint",
         "Saharanpur": "Honey",
         "Sambhal": "Mint",
-        "Sant": "Kabir Nagar Rice (Kala Namak Vr.)",
+        "Sant Kabir Nagar": "Rice (Kala Namak Vr.)",
         "Shahjahanpur": "Jaggery",
         "Shamali": "Jaggery",
         "Shrawasti": "Banana",
-        "Siddharth": "nagar Kala Namak Rice",
+        "Siddharthnagar": "Kala Namak Rice",
         "Sitapur": "Mango",
         "Sonbhadra": "Tomato",
         "Sultanpur": "Mint",
@@ -389,3 +399,67 @@ def regional_evidence(state, district):
             for slot in slots:
                 found[slot] = product
     return found
+
+
+# ---------------------------------------------------------------------------
+# The same fact, read the other way.
+#
+# ODOP_EVIDENCE above reads a district's product as a *supply* signal: Wayanad
+# is a milk district, so milk can be bought there. That reading is right, and
+# it was the only reading the engine had — which made a district's ODOP purely
+# good news.
+#
+# It is also a *competition* signal, from the identical fact. If her district
+# is officially recognised for milk, a great many of her neighbours are already
+# selling milk, PM-FME money has been flowing to milk units there, and the
+# local price is set by people with more animals than she has. A district
+# designated for her exact product is the most crowded place she could pick to
+# sell it in.
+#
+# Which of the two readings dominates depends on the trade, not the district,
+# and that is what data/market.py's `price_pressure` decides:
+#
+#   commodity        buyers choose on price alone, so every extra seller in the
+#                    district pushes her price down. Crowding is a real cost.
+#   semi_commodity   partly protected by taste, packaging or timing.
+#   differentiated   her own design or fit is the product. The neighbours are
+#                    an ecosystem — shared buyers, shared knowledge, a cluster
+#                    the marketing schemes are written for — not rivals.
+#
+# So the engine is not deciding whether competition is good or bad in general.
+# It is asking whether *this* trade is one where the next seller takes her
+# income or brings her a buyer.
+ODOP_COMPETITION = {
+    "milk": ["dairy"], "dairy": ["dairy"], "ghee": ["dairy"],
+    "honey": ["beekeeping"],
+    "mushroom": ["mushroom"],
+    "poultry": ["poultry"], "meat": ["poultry"], "egg": ["poultry"],
+    "handloom": ["weaving"], "silk": ["weaving"], "saree": ["weaving"],
+    "carpet": ["weaving"], "zari": ["weaving"], "textile": ["weaving", "tailoring"],
+    "terracotta": ["handcraft"], "pottery": ["handcraft"],
+    "filigree": ["handcraft"], "brass": ["handcraft"], "wood": ["handcraft"],
+    "stone": ["handcraft"], "bamboo": ["handcraft", "agarbatti"],
+    "cane": ["handcraft"],
+    "pickle": ["pickle"], "murabba": ["pickle"],
+    "incense": ["agarbatti"], "agarbatti": ["agarbatti"],
+    "soap": ["soap"],
+}
+
+
+def regional_competition(state, district, skill_id):
+    """
+    Is her district officially recognised for the very thing she wants to sell?
+
+    Returns the ODOP product when it is her own trade, else None. The caller
+    decides what that means — for a commodity it is a crowded market, for a
+    differentiated craft it is a cluster worth joining.
+    """
+    product = odop_for(state, district)
+    if not product:
+        return None
+
+    low = product.lower()
+    for keyword, skills in ODOP_COMPETITION.items():
+        if keyword in low and skill_id in skills:
+            return product
+    return None

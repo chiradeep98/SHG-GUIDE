@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from pathlib import Path
@@ -16,23 +17,31 @@ from data.questions import (
 )
 from data.day_questions import CONFIDENCE_CHECK, DAY_PROMPTS, THIS_OR_THAT
 from logic.skill_matching import match_skill_combined, match_skill_multi
-from logic.llm import CAPABILITY_CLUSTERS, looks_untranslated, read_her_day
+from logic.llm import CAPABILITY_CLUSTERS, looks_untranslated
+from logic import local_llm
 from logic.requirements import (
     SUSTAINABLE_SCORE, pick_bridging_slots, points_lost, score_if_fixed,
     slots_needed_for,
 )
 from logic.remedies import assess_with_remedies, shortlist_with_remedies
+from logic.market import HEALTHY_MARKET
+from logic.local_market import recent_openings
+from logic.mandi import prices_for
 from data.regions import known_districts, odop_for, regional_evidence
 from logic.scheme_matching import match_schemes
 from logic.channel_ranking import rank_channels
 from logic.roadmap import build_roadmap, build_alternative_narrative
 from logic.session_log import record_session
 
+log = logging.getLogger(__name__)
+
 st.set_page_config(page_title="SHG Guider")
 
 SKILLS_BY_ID = {s["id"]: s for s in SKILLS}
 ALTERNATIVES_TO_VALIDATE = 3
-OPTIONAL_FIELDS = set()  # district_area now drives regional lookups, so it must resolve
+# The pincode is the only optional answer: it buys a real count of who else
+# nearby does her trade, but she must not be blocked from continuing without it.
+OPTIONAL_FIELDS = {"pincode"}
 
 st.session_state.setdefault("step", "entry")
 st.session_state.setdefault("profile", {})
@@ -80,6 +89,16 @@ def translation_outage():
                               params=params, timeout=10).json().get("responseDetails") or ""
     except Exception:
         pass
+
+    # When the model on this machine is up it has already been tried and also
+    # failed, so quoting MyMemory's reset time would be beside the point.
+    if local_llm.available():
+        reason = (
+            "अनुवाद अभी नहीं हो पा रहा। थोड़ा रुककर फिर से बोलकर देखें।",
+            "The translation could not be completed just now. Wait a moment and try again.",
+        )
+        st.session_state["_translation_outage"] = reason
+        return reason
 
     if "ALL AVAILABLE FREE TRANSLATIONS" in detail.upper():
         when = re.search(r"NEXT AVAILABLE IN\s+(\d+)\s+HOURS", detail.upper())
@@ -169,30 +188,44 @@ def translate_long_en_to_hi(text):
 
 def translate_long_hi_to_en(text):
     """
-    Returns None rather than raising. MyMemory rate-limits hard (5 req/sec) and
-    it used to take down the skill screen mid-flow; worse, the caller had
-    already stored her Hindi by then, so the half-written state broke that
-    screen on every later rerun too. Callers must handle None.
+    MyMemory first, the model on this machine if MyMemory refuses, None if
+    both fail. Callers must handle None.
+
+    MyMemory leads because it translates literally, and the skill matcher wants
+    the literal words. The local model paraphrases — it rendered "दो भैंस"
+    (two buffalo) as "two cows" — so it is the rescue, not the default. It does
+    have one decisive advantage: no quota. MyMemory allows about a thousand
+    words a day per IP and then returns its quota warning *as the translation*,
+    which used to take this screen down for the rest of the day.
 
     Successful translations are remembered for the session. Streamlit reruns
     the whole script on every interaction, so without this her one spoken
-    sentence would be re-sent to MyMemory on each rerun and burn the daily
-    quota on text we have already translated. Only successes are stored, so a
-    failure is retried rather than cached.
+    sentence would be re-sent on each rerun and burn the daily quota on text we
+    have already translated. Only successes are stored, so a failure is retried
+    rather than cached.
     """
     memo = st.session_state.setdefault("_translation_memo", {})
     if text in memo:
         return memo[text]
 
+    english = None
     try:
         english = " ".join(translate_hi_to_en(chunk) for chunk in _split_into_chunks(text))
     except Exception:
-        return None
+        english = None
 
     # MyMemory sometimes echoes the Hindi straight back, or returns its quota
     # warning as the "translation". Handing either to the English skill matcher
     # gives a confident wrong match rather than an error, so treat it as a miss.
-    if looks_untranslated(english):
+    if english and looks_untranslated(english):
+        english = None
+
+    if not english:
+        english = local_llm.translate_to_english(text)
+        if english and looks_untranslated(english):
+            english = None
+
+    if not english:
         return None
 
     memo[text] = english
@@ -236,31 +269,33 @@ def bilingual(hindi, english, hindi_style=st.write):
         st.caption(english)
 
 
-def llm_api_key():
-    """
-    From .streamlit/secrets.toml if present, else the environment. Never
-    hard-coded — the key is a secret and this file is committed.
-    """
-    for name in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"):
-        try:
-            key = st.secrets.get(name)
-            if key:
-                return key
-        except Exception:
-            pass  # no secrets.toml at all — fall through to the environment
-        if os.environ.get(name):
-            return os.environ[name]
-    return None
-
-
 @st.cache_data(show_spinner=False)
-def cached_skill_reading(narrative, preference_items, api_key):
+def cached_skill_reading(narrative, preference_items):
     """
-    Cached so a rerun doesn't re-bill the call. `preference_items` is a sorted
+    The mirror's reading, from the model running on this machine.
+
+    This used to call Claude through OpenRouter first and fall back locally.
+    It no longer calls OpenRouter at all: the balance runs out, and when it
+    does every mirror load spends its time on a request that is going to
+    return 402 before falling back anyway — slow, and it fills the logs with
+    an error that is not the user's problem to read.
+
+    Ollama has no balance, no key and no network, so it cannot fail that way.
+    The trade is that an 8B model is weaker than Claude at this, which is why
+    logic/local_llm.py breaks the reading into small checked tasks rather than
+    asking for it all at once, and why choosing which trades to offer her stays
+    with the deterministic matcher.
+
+    logic/llm.py is left in place and simply unused — re-wire it here if there
+    is ever credit and the better words are worth paying for.
+
+    Cached so a rerun doesn't re-run the model. `preference_items` is a sorted
     tuple rather than a dict because cache keys must be hashable.
     """
-    reading = read_her_day(narrative, dict(preference_items), SKILLS, api_key=api_key)
-    return reading.model_dump() if reading else None
+    reading = local_llm.read_her_day_locally(narrative, SKILLS)
+    if not reading:
+        log.info("No reading: the local model did not answer")
+    return reading
 
 
 def restart():
@@ -321,7 +356,18 @@ def render_questions(keys, skill_id=None, key_prefix=""):
                 bilingual(q["hindi_prompt"], q["label_en"])
                 hindi_prompt_button(q["hindi_prompt"], f"prompt_{key}.mp3")
 
-                if qtype == "select":
+                if qtype == "text":
+                    typed = st.text_input(
+                        q["label_en"], value=profile.get(key, ""), max_chars=6,
+                        key=f"{key_prefix}text_{key}", label_visibility="collapsed",
+                        placeholder="e.g. 854311",
+                    )
+                    if typed:
+                        profile[key] = typed.strip()
+                    if q.get("help_hi"):
+                        st.caption(q["help_hi"])
+                        st.caption(q["help_en"])
+                elif qtype == "select":
                     profile[key] = st.selectbox(
                         q["label_en"], STATES, key=f"{key_prefix}select_{key}", label_visibility="collapsed"
                     )
@@ -423,121 +469,254 @@ def questions_for_skill(skill_id):
     return [k for k in keys if k not in DISTRICT_HANDLED_SEPARATELY]
 
 
-def show_requirement_breakdown(assessment):
-    icons = {"met": "✅", "partial": "🟡", "unmet": "❌", "unknown": "❔"}
-    with st.container(border=True):
-        for d in sorted(assessment["details"], key=lambda d: -d["weight"]):
-            critical = " *(ज़रूरी / critical)*" if d["weight"] >= 3 else ""
-            # A gap with a route around it shows as bridged, not failed — she
-            # should see the obstacle and the way past it in the same line.
-            if d.get("remedy"):
-                st.write(f"🔑 {d['short_label']}{critical}")
-                st.caption(f"↳ {d['remedy']['hindi']}")
-                st.caption(f"↳ {d['remedy']['english']}")
-            else:
-                st.write(f"{icons[d['status']]} {d['short_label']}{critical}")
+def show_requirement_breakdown(assessment, skill_id=None):
+    """
+    Every requirement in one scannable table, instead of a dozen stacked blocks
+    of text.
+
+    This was a bordered list where each requirement cost two or three lines —
+    a heading, then the Hindi remedy, then the English one — so a skill with
+    twelve requirements produced a page she had to scroll through to find the
+    one thing that mattered. The same facts fit in a table she can take in at a
+    glance and sort by what it is costing her, and the wording moves into the
+    remedy cards where she can act on it.
+    """
+    import pandas as pd
+
+    lost = points_lost(assessment)
+    # Plain symbols, not :material/…: — the icon syntax is markdown and renders
+    # as literal text inside a dataframe cell.
+    status_look = {
+        "met": ("✅", "आपके पास है / have it"),
+        "partial": ("🟡", "थोड़ा कम / partly"),
+        "unmet": ("❌", "नहीं है / missing"),
+        "unknown": ("➖", "पूछा नहीं / not asked"),
+    }
+
+    rows = []
+    for d in assessment["details"]:
+        icon, label = status_look[d["status"]]
+        if d.get("remedy"):
+            icon, label = "🔑", "रास्ता है / can arrange"
+        rows.append({
+            " ": icon,
+            "ज़रूरत / What this needs": (
+                f"{short_label_hi_for(d['slot'], skill_id)} / {d['short_label']}"
+            ),
+            "हाल / Status": label,
+            "ज़रूरी": "●" if d["weight"] >= 3 else "",
+            "असर / Points lost": lost.get(d["slot"], 0),
+        })
+
+    frame = pd.DataFrame(rows).sort_values("असर / Points lost", ascending=False)
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        row_height=38,
+        # What it costs her comes before the wordier columns, so the number she
+        # is actually looking for is never the one pushed off the right edge.
+        column_order=[" ", "ज़रूरत / What this needs", "असर / Points lost",
+                      "हाल / Status", "ज़रूरी"],
+        column_config={
+            " ": st.column_config.TextColumn(width=44),
+            "ज़रूरत / What this needs": st.column_config.TextColumn(width="medium"),
+            "हाल / Status": st.column_config.TextColumn(width="medium"),
+            "ज़रूरी": st.column_config.TextColumn(
+                width=64, help="ज़रूरी / critical — इसके बिना यह काम नहीं चलेगा"),
+            "असर / Points lost": st.column_config.ProgressColumn(
+                help="इस कमी से कितने अंक कम हुए / points this gap costs you",
+                format="%d", min_value=0,
+                max_value=max(20, max(lost.values(), default=0)), width="small",
+            ),
+        },
+    )
+
+
+def show_market_reading(assessment, skill):
+    """
+    Whether she can *sell* it here, shown next to whether she can make it.
+
+    Kept as its own panel rather than folded into the score, because the two
+    have different answers. A production gap is closed with a scheme or a
+    district resource; a market gap is closed by changing what she makes, how
+    she differentiates it, or who she sells to — so merging them into one
+    number would tell her the size of her problem while hiding its kind.
+
+    Only the factors that actually decide the reading get their sentence. The
+    rest are badges, because eight bordered paragraphs is not a panel anyone
+    reads to the end of.
+    """
+    import pandas as pd
+
+    market = assessment.get("market")
+    if not market:
+        return
+    profile = st.session_state.profile
+
+    # The counted fact leads. Everything else here is either a property of the
+    # trade or her own impression; this is the one line that is a measurement
+    # of her own area.
+    counted = next((f for f in market["factors"] if f["key"] == "registry_competition"), None)
+    if counted:
+        st.info(counted["hindi"], icon=":material/verified:")
+        st.caption(counted["english"])
+    elif not st.session_state.profile.get("pincode"):
+        st.caption(
+            "पिन कोड बताने पर हम सरकारी रिकॉर्ड से गिनकर बता सकते हैं कि आपके "
+            "आसपास कितने लोग यही काम कर रहे हैं / Give your PIN code and we can "
+            "count from government records how many people near you already do this"
+        )
+
+    # New registrations in her pincode, as something to read and not something
+    # that moves the score. The per-year counts are single digits and single
+    # digits move for reasons unrelated to demand — one Araria pincode logged
+    # poultry at 2, then 33, then 10, and that 33 was a scheme enrolment drive.
+    # Weighing that would tell her a trade is booming because a government
+    # programme signed up thirty people one afternoon. Showing it is honest:
+    # "four opened here last year" is a fact about her own village.
+    opened = recent_openings(st.session_state.profile.get("pincode"), skill["id"])
+    if opened and opened["recent"]:
+        trend = opened["trend_years"]
+        st.caption(
+            f"इनमें से {opened['recent']} इसी साल ({opened['year']}) शुरू हुए — "
+            f"{', '.join(f'{y}: {n}' for y, n in trend.items())} / "
+            f"{opened['recent']} of them registered in {opened['year']} alone. "
+            f"Shown as background only — these numbers are too small to score on."
+        )
+
+    if market["crowded_for_her_trade"]:
+        st.warning(
+            "आपके ज़िले की पहचान इसी चीज़ से है — बनाना आसान है, पर यहीं वैसे ही "
+            "बेचना सबसे भरी हुई जगह है।",
+            icon=":material/groups:",
+        )
+        st.caption(
+            "Your district is known for this very product — easy to make here, but "
+            "selling the same thing the same way here is the most crowded choice."
+        )
+
+    # Today's mandi rates for what this trade buys, in her own district. Shown,
+    # never scored: prices move on weather, festivals and the day of the week,
+    # and telling her the plan is worth ten points fewer because tomatoes were
+    # cheap this morning would be telling her something untrue.
+    from logic.mandi import COMMODITY_TRADES
+    her_district = profile.get("district_confirmed") or profile.get("district_area")
+    rates = prices_for(profile.get("state"), her_district, skill["id"])
+    if rates is None and skill["id"] in COMMODITY_TRADES:
+        # Saying nothing looked like a missing feature. Most districts report no
+        # mandi arrivals on most days — the feed held 18,578 rows one day and 107
+        # the next — so absence is the normal case and worth stating, or she is
+        # left wondering whether the app even looked.
+        st.caption(
+            f"आज {her_district or 'आपके ज़िले'} की मंडी से कोई भाव नहीं आया — "
+            f"हर ज़िले में रोज़ नीलामी नहीं होती। / No mandi rates came in from "
+            f"{her_district or 'your district'} today; most districts report only "
+            f"on the days they hold an auction."
+        )
+    if rates:
+        fresh = any(r.get("today") for r in rates)
+        with st.expander(
+            (f"आज के मंडी भाव / Today's mandi rates for what you would buy ({len(rates)})"
+             if fresh else
+             f"हाल के मंडी भाव / Recent mandi rates for what you would buy ({len(rates)})"),
+            icon=":material/currency_rupee:",
+        ):
+            st.caption(
+                "आपके ज़िले की मंडी के आज के दाम — इससे कच्चे माल की लागत का अंदाज़ा "
+                "मिलता है। ये दाम रोज़ बदलते हैं, इसलिए इन्हें स्कोर में नहीं गिना गया।"
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"चीज़ / Item": r["commodity"],
+                     "भाव / Rate": f"₹{r['modal_price']}/quintal",
+                     "कब का / As of": ("आज / today" if r.get("today")
+                                       else (r.get("date") or "—")),
+                     "मंडी / Market": r["market"] or "—"}
+                    for r in rates[:12]
+                ]),
+                hide_index=True, width="stretch",
+            )
+            st.caption(
+                ("Today's rates in your district's mandi, so you can judge what your "
+                 if fresh else
+                 "The most recent rates recorded in your district's mandi — the date of "
+                 "each is shown, since they are not all from today. They tell you what your ")
+                + "raw material will cost. Prices move daily, so they are not counted "
+                  "in the score.")
+
+    # The two or three factors that actually move the number, in full.
+    ranked = sorted(market["factors"], key=lambda f: (-f["weight"], f["position"]))
+    headline = [f for f in ranked if f["key"] != "registry_competition"][:3]
+    for f in headline:
+        with st.container(border=True):
+            st.badge(
+                f"{f['label_hi']} / {f['label_en']}",
+                icon=":material/thumb_up:" if f["good"] else ":material/priority_high:",
+                color="green" if f["good"] else "orange",
+            )
+            bilingual(f["hindi"], f["english"])
+
+    rest = [f for f in ranked if f not in headline and f["key"] != "registry_competition"]
+    if rest:
+        with st.expander(f"बाक़ी {len(rest)} बातें / {len(rest)} more things we looked at"):
+            for f in rest:
+                st.badge(
+                    f"{f['label_hi']} / {f['label_en']}",
+                    icon=":material/check:" if f["good"] else ":material/remove:",
+                    color="green" if f["good"] else "gray",
+                )
+                bilingual(f["hindi"], f["english"])
 
 
 def show_failure_summary(assessment, skill, profile):
     """
-    The whole picture of why this skill is hard here, on one screen.
+    Why this skill is hard here, and what would change it.
 
-    The verdict screen used to give her a number and a flat list of ticks and
-    crosses, which says that it failed but not why, nor which gap matters most.
-    This separates the three things she actually needs to tell apart — what is
-    genuinely stopping her, what is merely missing but arrangeable, and what she
-    already has — and puts a cost in points against each failure so the score
-    stops being an assertion and becomes something she can follow.
+    This used to open with three tabs of its own. It now lives inside a tab, so
+    the inner ones are gone — nested tabs hide exactly the thing she is looking
+    for. The blocking gaps lead, because they are the ones with no way round;
+    everything else is in the requirements table above.
 
-    The last panel is the point of the screen: she ticks what she thinks she
-    could arrange and watches the score move. Nothing is hidden from her and
-    nothing is guessed — it is the same arithmetic that produced the verdict.
+    The panel ends with the part that does the real work: she ticks what she
+    thinks she could arrange and watches the score move, on the same arithmetic
+    that produced the verdict.
     """
     lost = points_lost(assessment)
     details = assessment["details"]
     blocking = [d for d in details if d["status"] == "unmet" and not d.get("remedy")]
     bridged = [d for d in details if d.get("remedy")]
-    holding = [d for d in details if d["status"] in ("met", "partial") and not d.get("remedy")]
-    unasked = [d for d in details if d["status"] == "unknown"]
-
     district = profile.get("district_confirmed") or profile.get("district_area") or ""
 
-    st.markdown("#### क्यों मुश्किल है / Why this is difficult")
-
     # The two or three gaps doing the most damage, named up front — she should
-    # not have to read a list of twelve rows to find out what actually decided it.
+    # not have to read a list of twelve rows to find what decided it.
     worst = sorted(lost, key=lambda slot: -lost[slot])[:3]
     if worst:
         by_slot = {d["slot"]: d for d in details}
         hi_names = ", ".join(short_label_hi_for(s, skill["id"]) for s in worst)
         en_names = ", ".join(by_slot[s]["short_label"].lower() for s in worst)
-        where_hi = f"{district} में " if district else ""
-        where_en = f" in {district}" if district else ""
         bilingual(
-            f"{where_hi}इस काम में सबसे ज़्यादा फ़र्क़ इन्हीं से पड़ रहा है: {hi_names}। "
-            f"इन्हीं की वजह से {sum(lost[s] for s in worst)} अंक कम हुए हैं।",
-            f"What weighs on this work{where_en} is mainly: {en_names} — "
-            f"together they account for {sum(lost[s] for s in worst)} of the missing points.",
+            f"{district + ' में ' if district else ''}सबसे ज़्यादा फ़र्क़ इन्हीं से पड़ रहा है: "
+            f"{hi_names}। इन्हीं की वजह से {sum(lost[s] for s in worst)} अंक कम हुए हैं।",
+            f"What weighs on this work{' in ' + district if district else ''} is mainly: "
+            f"{en_names} — together they account for {sum(lost[s] for s in worst)} of the "
+            f"missing points.",
         )
 
-    left, middle, right = st.columns(3)
-    left.metric("रुकावटें / Blocking", len(blocking))
-    middle.metric("रास्ता मिला / Has a route", len(bridged))
-    right.metric("आपके पास है / Already yours", len(holding))
+    with st.container(horizontal=True):
+        st.metric("रुकावटें / Blocking", len(blocking), border=True)
+        st.metric("रास्ता मिला / Has a route", len(bridged), border=True)
+        st.metric("पूछा नहीं / Not asked",
+                  len([d for d in details if d["status"] == "unknown"]), border=True)
 
-    tabs = st.tabs([
-        f"🚧 रुकावट / Blocking ({len(blocking)})",
-        f"🔑 इंतज़ाम हो सकता है / Can be arranged ({len(bridged)})",
-        f"✅ जो आपके पास है / Already yours ({len(holding)})",
-    ])
-
-    def rows(items, show_cost=True):
-        for d in sorted(items, key=lambda d: (-lost.get(d["slot"], 0), -d["weight"])):
-            cost = lost.get(d["slot"], 0)
-            critical = " · ज़रूरी / critical" if d["weight"] >= 3 else ""
-            st.write(f"**{short_label_hi_for(d['slot'], skill['id'])}**{critical}")
-            st.caption(d["short_label"])
-            if show_cost and cost:
-                st.progress(min(cost, 100) / 100, text=f"−{cost} अंक / −{cost} points")
-
-    with tabs[0]:
-        if blocking:
-            bilingual(
-                "इनका कोई रास्ता अभी नहीं मिला — यही इस काम को रोक रहे हैं।",
-                "No way around these was found — these are what hold the work back.",
+    if blocking:
+        st.markdown("**जिनका रास्ता नहीं मिला / No way around these yet**")
+        for d in sorted(blocking, key=lambda d: -lost.get(d["slot"], 0)):
+            st.badge(
+                f"{short_label_hi_for(d['slot'], skill['id'])} / {d['short_label']}"
+                f"  −{lost.get(d['slot'], 0)}",
+                icon=":material/block:", color="red",
             )
-            rows(blocking)
-        else:
-            bilingual(
-                "कोई ऐसी रुकावट नहीं है जिसका रास्ता न हो।",
-                "Nothing here is blocking outright — every gap has a route around it.",
-            )
-
-    with tabs[1]:
-        if bridged:
-            bilingual(
-                "ये कम हैं, पर इनका इंतज़ाम हो सकता है। नीचे हर एक का रास्ता दिया है।",
-                "These are short, but they can be arranged. The route for each is below.",
-            )
-            rows(bridged)
-        else:
-            bilingual("अभी कोई रास्ता नहीं मिला।", "No routes were found yet.")
-
-    with tabs[2]:
-        if holding:
-            bilingual(
-                "ये आपके पास पहले से हैं — शुरुआत यहीं से होती है।",
-                "You already have these — this is what you would be building on.",
-            )
-            rows(holding, show_cost=False)
-        else:
-            bilingual("अभी तक कुछ पूरा नहीं मिला।", "Nothing is fully in place yet.")
-
-    if unasked:
-        st.caption(
-            f"{len(unasked)} बातें अभी पूछी नहीं गईं, इसलिए उन्हें गिना नहीं गया / "
-            f"{len(unasked)} things were not asked, so they were left out of the score"
-        )
 
     # --- what she would need to change, tried out live
     fixable = [d for d in details if d["slot"] in lost]
@@ -561,14 +740,13 @@ def show_failure_summary(assessment, skill, profile):
     st.progress(min(new_score, 100) / 100,
                 text=f"{assessment['score']} → {new_score} / 100")
     if not chosen:
-        bilingual(
-            "ऊपर कुछ चुनिए और देखिए स्कोर कहाँ पहुँचता है।",
-            "Tick one above and watch where the score reaches.",
-        )
+        st.caption("ऊपर कुछ चुनिए और देखिए स्कोर कहाँ पहुँचता है / "
+                   "Tick one above and watch where the score reaches")
     elif new_score >= SUSTAINABLE_SCORE and not left_gaps:
         st.success(
             f"इतना हो जाए तो यह काम आपके यहाँ चल सकता है ({new_score}/100) / "
-            f"Arrange these and this work can support you where you are ({new_score}/100)"
+            f"Arrange these and this work can support you where you are ({new_score}/100)",
+            icon=":material/trending_up:",
         )
     elif left_gaps:
         bilingual(
@@ -578,10 +756,8 @@ def show_failure_summary(assessment, skill, profile):
             + " would still be in the way.",
         )
     else:
-        bilingual(
-            f"स्कोर {new_score} तक पहुँचता है, अभी भी {SUSTAINABLE_SCORE} से कम है।",
-            f"That reaches {new_score}, still short of the {SUSTAINABLE_SCORE} this work needs.",
-        )
+        st.caption(f"स्कोर {new_score} तक पहुँचता है, अभी भी {SUSTAINABLE_SCORE} से कम है / "
+                   f"That reaches {new_score}, still short of the {SUSTAINABLE_SCORE} needed")
 
 
 def show_remedies(assessment):
@@ -739,37 +915,68 @@ elif st.session_state.step == "assessment_verdict":
     skill = SKILLS_BY_ID[profile["skill_id"]]
     assessment = assess_with_remedies(skill, profile, SCHEMES)
     profile["own_assessment"] = assessment
+    market = assessment.get("market")
+    works = assessment["verdict"] == "sustainable"
 
     st.subheader(f"{skill['name']} — आपके हालात में / In your situation")
-    st.metric("स्कोर / Score", f"{assessment['score']} / 100")
-    show_requirement_breakdown(assessment)
 
-    if assessment["verdict"] == "sustainable":
-        st.success("यह आपके इलाके में चल सकता है / This can work where you are")
-        if st.button("पूरा रोडमैप देखें / See full roadmap", icon=":material/arrow_forward:"):
+    # The two numbers first, because they are the answer. Making and selling are
+    # shown side by side rather than averaged: "you can make this but will
+    # struggle to sell it" and the reverse need different advice, and one
+    # combined score would hide which of the two she has.
+    with st.container(horizontal=True):
+        st.metric("बनाने की तैयारी / Ready to make", f"{assessment['score']}/100",
+                  border=True, icon=":material/construction:")
+        if market:
+            st.metric("बिकने की गुंजाइश / Ready to sell", f"{market['score']}/100",
+                      border=True, icon=":material/storefront:")
+
+    if works:
+        st.success("यह आपके इलाके में चल सकता है / This can work where you are",
+                   icon=":material/check_circle:")
+    elif assessment["blockers"]:
+        st.warning(
+            "यह आपके इलाके में मुश्किल हो सकता है — मुख्य दिक्कत: "
+            + ", ".join(assessment["blockers"]),
+            icon=":material/report:",
+        )
+        st.caption("This may be difficult where you are. Main difficulty: "
+                   + ", ".join(assessment["blockers"]))
+    else:
+        st.info(
+            "कुछ चीज़ें कम हैं, लेकिन उनका इंतज़ाम हो सकता है / "
+            "Some things are missing, but there are ways to arrange them",
+            icon=":material/lightbulb:",
+        )
+
+    # Tabs rather than one long scroll. The screen carried the requirement list,
+    # the market reading, the reasons it failed and every remedy one after the
+    # other, which is several pages of text before she reaches anything she can
+    # act on.
+    names = ["ज़रूरतें / What it needs", "बाज़ार / Market"]
+    if not works:
+        names.append("रास्ते / Ways forward")
+    panels = st.tabs(names)
+
+    with panels[0]:
+        show_requirement_breakdown(assessment, skill["id"])
+
+    with panels[1]:
+        show_market_reading(assessment, skill)
+
+    if works:
+        if st.button("पूरा रोडमैप देखें / See full roadmap",
+                     icon=":material/arrow_forward:", type="primary"):
             profile["final_skill_id"] = skill["id"]
             profile["final_assessment"] = assessment
             st.session_state.step = "roadmap_result"
             st.rerun()
     else:
-        if assessment["blockers"]:
-            st.warning("यह आपके इलाके में मुश्किल हो सकता है / This may be difficult where you are")
-            st.write("मुख्य दिक्कत / Main difficulty: " + ", ".join(assessment["blockers"]))
-        else:
-            st.info(
-                "कुछ चीज़ें कम हैं, लेकिन उनका इंतज़ाम हो सकता है / "
-                "Some things are missing, but there are ways to arrange them"
-            )
-
-        # Why it failed, before what to do about it — she is being told her own
-        # skill will not work here, and deserves the full reasoning rather than
-        # a score and a list of crosses.
-        st.divider()
-        show_failure_summary(assessment, skill, profile)
-
-        st.divider()
-        show_remedies(assessment)
-        if st.button("बेहतर विकल्प देखें / Look at better options", icon=":material/arrow_forward:"):
+        with panels[2]:
+            show_failure_summary(assessment, skill, profile)
+            show_remedies(assessment)
+        if st.button("बेहतर विकल्प देखें / Look at better options",
+                     icon=":material/arrow_forward:", type="primary"):
             st.session_state.step = "bridging_questions"
             st.rerun()
 
@@ -879,14 +1086,53 @@ elif st.session_state.step == "alternatives_result":
         st.write(narrative)
         hindi_prompt_button(translate_long_en_to_hi(narrative), "alt_narrative.mp3")
 
+    # This screen is where Scenario 2 always lands — the woman who did not know
+    # what her skill was and needs the most help choosing. It used to show a
+    # single bare number per option, so she was picking between three trades on
+    # less information than Scenario 1 gives about one. Each option now carries
+    # the same two readings as the verdict screen, with the detail a click away
+    # so three options do not become three screens of text.
     for rank, r in enumerate(recommended, start=1):
         skill = SKILLS_BY_ID[r["skill_id"]]
+        market = r.get("market")
         with st.container(border=True):
-            st.write(f"**{rank}. {skill['name']}** — {r['score']} / 100")
-            show_requirement_breakdown(r)
+            st.markdown(f"**{rank}. {skill['name']}**")
+
+            with st.container(horizontal=True):
+                st.metric("बनाने की तैयारी / Ready to make", f"{r['score']}/100",
+                          border=True, icon=":material/construction:")
+                if market:
+                    st.metric("बिकने की गुंजाइश / Ready to sell", f"{market['score']}/100",
+                              border=True, icon=":material/storefront:")
+
+            # One line on what decides it, so the cards can be compared without
+            # opening any of them.
+            if market and market["crowded_for_her_trade"]:
+                st.caption("⚠️ आपके ज़िले की पहचान इसी चीज़ से है — बेचने में मुक़ाबला ज़्यादा है / "
+                           "Your district is known for this very product, so selling is crowded")
+            elif market and not market["healthy"]:
+                st.caption("बनाना आसान है, बेचना मुश्किल / Easy enough to make here, harder to sell")
+            elif r.get("remedied_blockers"):
+                st.caption("कुछ चीज़ों का इंतज़ाम करना होगा / A few things would need arranging — "
+                           + ", ".join(r["remedied_blockers"]))
+            else:
+                st.caption("आपके हालात में यह अच्छा बैठता है / This fits your situation well")
+
+            with st.expander(f"पूरी जानकारी / Full detail on {skill['name']}",
+                             icon=":material/expand_more:"):
+                inner = st.tabs(["ज़रूरतें / What it needs", "बाज़ार / Market",
+                                 "रास्ते / Ways forward"])
+                with inner[0]:
+                    show_requirement_breakdown(r, r["skill_id"])
+                with inner[1]:
+                    show_market_reading(r, skill)
+                with inner[2]:
+                    show_remedies(r)
+
             if st.button(
                 f"{skill['name']} का रोडमैप देखें / See roadmap",
                 icon=":material/arrow_forward:",
+                type="primary" if rank == 1 else "secondary",
                 key=f"pick_{r['skill_id']}",
             ):
                 profile["final_skill_id"] = r["skill_id"]
@@ -1021,9 +1267,7 @@ elif st.session_state.step == "mirror":
 
     if "skill_reading" not in profile:
         with st.spinner("आपकी बातें समझ रहे हैं... / Making sense of what you told me..."):
-            profile["skill_reading"] = cached_skill_reading(
-                narrative, preferences, llm_api_key()
-            )
+            profile["skill_reading"] = cached_skill_reading(narrative, preferences)
 
     reading = profile["skill_reading"]
 
@@ -1059,9 +1303,16 @@ elif st.session_state.step == "mirror":
         profile["first_step_hindi"] = reading.get("first_step_hindi")
         profile["first_step_english"] = reading.get("first_step_english")
     else:
-        # No key, or the call failed. Fall back to the deterministic matcher so
-        # the flow still completes — she just doesn't get the reflection.
         st.subheader("आपके जवाबों के आधार पर / Based on your answers")
+        candidate_ids = []
+
+    # A reading can arrive with the words but no skills: the local model is
+    # asked for the reflection only, because an 8B model guessing skill ids
+    # would show her a trade she never mentioned as though we had heard it in
+    # her own words. The deterministic matcher fills the list in that case, so
+    # the reflection is a bonus rather than a dead end — without this she
+    # reached the mirror and was offered nothing to choose from.
+    if not candidate_ids:
         texts = [profile.get(q["id"], "") for q in DAY_PROMPTS]
         matches = match_skill_multi([t for t in texts if t])
         candidate_ids = [sid for sid, _score in matches] or [s["id"] for s in SKILLS]
@@ -1160,7 +1411,7 @@ elif st.session_state.step == "roadmap_result":
 
     if roadmap["assessment"]:
         st.markdown("**आपके हालात के हिसाब से / Against your situation:**")
-        show_requirement_breakdown(roadmap["assessment"])
+        show_requirement_breakdown(roadmap["assessment"], final_skill["id"])
 
     # One concrete thing to try this week. Confidence comes from having done
     # something small and seen it work, not from being told she can — so this

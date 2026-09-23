@@ -39,6 +39,12 @@ SLOT_SCALES = {
     "daily_hours": ["under_2", "2_to_4", "4_to_8"],
     "market_distance": ["far", "moderate", "nearby"],
     "transport_distance": ["far", "moderate", "nearby"],
+    # The market side, worst -> best. "many others nearby" is the worst answer
+    # in a commodity trade and close to harmless in a differentiated one, so
+    # logic/market.py weighs this slot by the trade's price pressure rather
+    # than treating one answer as equally bad everywhere.
+    "local_competition": ["many", "a_few", "none"],
+    "buyer_pull": ["never", "sometimes", "regularly"],
     # infrastructure
     "covered_space": ["none", "small_corner", "one_room", "large_space"],
     "electricity_reliability": ["rare", "few_hours", "mostly_reliable"],
@@ -68,6 +74,18 @@ UNIVERSAL_SLOTS = [
     "mobility_restricted",
     "market_distance",
     "transport_distance",
+    # The market side. No dataset records how many women in her village already
+    # sell pickles, or whether anyone has ever asked her for them — the Udyam
+    # registry stops at district totals and the mandi price feed covers only a
+    # handful of crops. These two are the only source for that, so they are
+    # asked of every woman rather than being skill-specific.
+    "local_competition",
+    "buyer_pull",
+    # Her pincode. A district holds two million people; a pincode is a few
+    # villages, and the Udyam registry filters by it — so this is what turns
+    # "how many others near me do this" from her impression into a count.
+    # Optional: the engine works without it, just less locally.
+    "pincode",
 ]
 
 # The one slot that most distinguishes each skill. Bridging asks these for
@@ -271,6 +289,39 @@ SLOT_QUESTIONS = {
         "क्या खाना पकाने का तेल या चर्बी सस्ते में उपलब्ध है?",
         "Are cooking oils or fats cheaply available?",
     ),
+
+    # --- the market. Worth being clear about what these are *not*: they do not
+    # replace the district data in data/regions.py and data/market_density.py,
+    # they sit beside it. Her answer knows what no registry does — the four
+    # women on her lane who all sell pickle — and the registry knows what she
+    # cannot, that her district is officially designated for milk.
+    "local_competition": {
+        "type": "choice",
+        "hindi_prompt": "आपके आसपास कितनी और महिलाएं यही काम करके बेचती हैं?",
+        "label_en": "How many other women near you already sell the same thing?",
+        "options": [
+            {"value": "many", "label_hi": "👥 बहुत सारी / many already do"},
+            {"value": "a_few", "label_hi": "👤 दो-चार / two or three"},
+            {"value": "none", "label_hi": "🙅 कोई नहीं / no one nearby"},
+        ],
+    },
+    "pincode": {
+        "type": "text",
+        "hindi_prompt": "आपके इलाके का पिन कोड क्या है? (6 अंक)",
+        "label_en": "What is your area's PIN code? (6 digits)",
+        "help_hi": "इससे हम देख पाएंगे कि आपके आसपास पहले से कौन-कौन यही काम कर रहा है।",
+        "help_en": "This lets us look up how many people around you already do this work.",
+    },
+    "buyer_pull": {
+        "type": "choice",
+        "hindi_prompt": "क्या किसी ने आपसे यह चीज़ मांगी या खरीदने को पूछा है?",
+        "label_en": "Has anyone actually asked you for this, or offered to buy it?",
+        "options": [
+            {"value": "never", "label_hi": "❌ कभी नहीं / never"},
+            {"value": "sometimes", "label_hi": "🙂 कभी-कभी / once or twice"},
+            {"value": "regularly", "label_hi": "✅ अक्सर पूछते हैं / people ask regularly"},
+        ],
+    },
 }
 
 
@@ -495,6 +546,9 @@ SHORT_LABELS = {
     "mushroom_spawn_supplier": "A spawn supplier nearby",
     "soap_digital_selling": "A phone to sell from",
     "agarbatti_fragrance_supplier": "A fragrance-oil supplier",
+    "local_competition": "Others nearby selling this",
+    "buyer_pull": "People asking to buy",
+    "pincode": "Your PIN code",
 }
 
 
@@ -578,6 +632,9 @@ SHORT_LABELS_HI = {
     "mushroom_spawn_supplier": "पास में बीज (स्पॉन) देने वाला",
     "soap_digital_selling": "बेचने के लिए फ़ोन",
     "agarbatti_fragrance_supplier": "खुशबू का तेल देने वाला",
+    "local_competition": "आसपास यही काम करने वाले",
+    "buyer_pull": "खरीदने के लिए पूछने वाले",
+    "pincode": "आपका पिन कोड",
 }
 
 

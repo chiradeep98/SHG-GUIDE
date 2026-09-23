@@ -167,6 +167,7 @@ REMEDIES = {
     },
     "helpers_available": {
         "sources": ["structural"],
+        "group_based": True,
         "hindi": "आपका स्वयं सहायता समूह ही वह मदद है — यह काम समूह में मिलकर किया जाता है।",
         "english": "Your self-help group is that help — this work is done together, not alone.",
     },
@@ -279,6 +280,7 @@ _EQUIPMENT_REMEDY = {
 _MARKET_GAPS = ["market_distance", "transport_distance", "mushroom_buyer_in_days",
                 "soap_digital_selling", "dairy_collection_centre"]
 _MARKET_REMEDY = {
+    "group_based": True,
     # The government marketplaces are the one real answer to distance: the
     # buyer comes to the listing. Falls back to the group when she is not
     # eligible (they need Udyam registration and a running unit).
@@ -299,6 +301,7 @@ _MARKET_REMEDY = {
 _SUPPLY_GAPS = ["agarbatti_fragrance_supplier", "mushroom_spawn_supplier"]
 _SUPPLY_REMEDY = {
     "sources": ["structural"],
+    "group_based": True,
     "hindi": "यह सामान कृषि विज्ञान केंद्र या शहर के बाज़ार से मिल जाता है, और समूह के साथ मिलकर एक बार में मंगाया जा सकता है।",
     "english": "These supplies come from the Krishi Vigyan Kendra or the town market, and the group can order them together in one go.",
 }
@@ -347,6 +350,7 @@ _CREDIT_REMEDY = {
 _LABOUR_GAPS = ["weaving_preloom_help"]
 _LABOUR_REMEDY = {
     "sources": ["structural"],
+    "group_based": True,
     "hindi": "यह काम समूह में बाँटा जा सकता है — ताना-बाना का काम अक्सर दूसरे लोग करते हैं।",
     "english": "This work can be shared in the group — warping and bobbin work is usually done by others.",
 }
@@ -480,7 +484,7 @@ def _scheme_available(slot, profile, schemes, skill_category, already_used=(),
     return None
 
 
-def _personalise(remedy, kind, detail, profile, scheme=None):
+def _personalise(remedy, kind, detail, profile, scheme=None, with_group_note=True):
     """
     Name her district and the actual scheme in the message.
 
@@ -496,7 +500,17 @@ def _personalise(remedy, kind, detail, profile, scheme=None):
     lets a remedy carry the wording that matches the evidence we actually have.
     """
     district = profile.get("district_confirmed") or profile.get("district_area") or ""
+    base = remedy
     remedy = {**remedy, **remedy.get("by_source", {}).get(kind, {})}
+
+    # Advice that rests on her group gets her district's actual group numbers
+    # appended. "Your group can pool and sell together" is sound advice and
+    # reads as boilerplate; the same sentence followed by "Araria district has
+    # 2,611 groups with 22,048 members" is about a place she knows.
+    group_note = None
+    if with_group_note and base.get("group_based") and kind == "structural":
+        from logic.shg import group_strength_note
+        group_note = group_strength_note(profile.get("state"), district)
 
     def render(text):
         if kind == "regional" and district and detail:
@@ -505,17 +519,23 @@ def _personalise(remedy, kind, detail, profile, scheme=None):
             return f"{text} ({detail})"
         return text
 
+    hindi, english = render(remedy["hindi"]), render(remedy["english"])
+    if group_note:
+        hindi = f"{hindi} {group_note[0]}"
+        english = f"{english} {group_note[1]}"
+
     return {
         "kind": kind,
         "detail": detail,
-        "hindi": render(remedy["hindi"]),
-        "english": render(remedy["english"]),
+        "hindi": hindi,
+        "english": english,
         "scheme": scheme,
+        "group_note_used": bool(group_note),
     }
 
 
 def find_remedy(slot, profile, schemes, skill_category=None, skill_id=None,
-                already_used=()):
+                already_used=(), with_group_note=True):
     """
     The route around this gap, or None if there isn't one.
 
@@ -532,16 +552,19 @@ def find_remedy(slot, profile, schemes, skill_category=None, skill_id=None,
             if source == "regional":
                 evidence = regional_evidence(profile.get("state"), profile.get("district_area"))
                 if slot in evidence:
-                    return _personalise(remedy, "regional", evidence[slot], profile)
+                    return _personalise(remedy, "regional", evidence[slot], profile,
+                                        with_group_note=with_group_note)
 
             elif source == "scheme":
                 scheme = _scheme_available(slot, profile, schemes, skill_category,
                                           already_used, allow_reuse)
                 if scheme:
-                    return _personalise(remedy, "scheme", scheme["name"], profile, scheme)
+                    return _personalise(remedy, "scheme", scheme["name"], profile, scheme,
+                                        with_group_note=with_group_note)
 
             elif source == "structural":
-                return _personalise(remedy, "structural", None, profile)
+                return _personalise(remedy, "structural", None, profile,
+                                    with_group_note=with_group_note)
         return None
 
     # First pass refuses to reuse a scheme this skill has already been sent to.
@@ -570,12 +593,20 @@ def apply_remedies(assessment, profile, schemes, skill_category=None, skill_id=N
     """
     remedied, unremedied = [], []
     used_schemes = []
+    # Her district's group figures are one fact about one place, so they are
+    # stated once. Weaving alone has two gaps whose answer is the group, and
+    # both cards were ending with the identical "Bhagalpur district has 2,444
+    # such groups" — the same duplication the scheme mapping had.
+    group_note_spent = False
 
     gaps = [d for d in assessment["details"] if d["status"] not in ("met", "unknown")]
     for detail in sorted(gaps, key=lambda d: -d["weight"]):
         remedy = find_remedy(detail["slot"], profile, schemes, skill_category, skill_id,
-                             already_used=used_schemes)
+                             already_used=used_schemes,
+                             with_group_note=not group_note_spent)
         detail["remedy"] = remedy
+        if remedy and remedy.get("group_note_used"):
+            group_note_spent = True
         if remedy and remedy.get("scheme"):
             used_schemes.append(remedy["scheme"]["id"])
         if detail["short_label"] in assessment["blockers"]:
@@ -602,10 +633,44 @@ def apply_remedies(assessment, profile, schemes, skill_category=None, skill_id=N
 
 
 def assess_with_remedies(skill, profile, schemes):
-    """assess_skill() plus the remedy pass — what the app should always use."""
+    """
+    assess_skill() plus the remedy pass plus the market reading — what the app
+    should always use.
+
+    The market score is attached rather than folded in. "You can make this but
+    will struggle to sell it" and "this sells well but you cannot make it yet"
+    are different problems needing different advice, and averaging them into
+    one number would hide which one she has. So `score` stays a production
+    reading and `market` sits next to it.
+
+    Market never eliminates. A thin market is a reason to change channel,
+    product or design — all things the roadmap can act on — not grounds to
+    strike out a trade she is otherwise equipped for. Only a requirement with
+    no remedy does that.
+    """
     from logic.requirements import assess_skill
-    return apply_remedies(assess_skill(skill, profile), profile, schemes,
-                          skill["category"], skill["id"])
+    from logic.market import assess_market
+
+    assessment = apply_remedies(assess_skill(skill, profile), profile, schemes,
+                                skill["category"], skill["id"])
+    assessment["market"] = assess_market(skill, profile)
+
+    # The market tilts the ranking, and it has to do so here rather than in
+    # shortlist_with_remedies() — which is where it used to live, and meant the
+    # final recommendation screen ignored the market entirely. That screen
+    # assesses the shortlisted skills directly, so three trades she was equally
+    # able to make were ordered on coverage alone and a crowded commodity could
+    # lead a list over a trade with far better prospects.
+    #
+    # A tilt and not a takeover: production readiness still decides most of it,
+    # and the market moves a skill by at most a quarter of its standing either
+    # way. It never eliminates.
+    market = assessment["market"]
+    if market and not assessment["eliminated"]:
+        assessment["ranking_score"] = round(
+            assessment["ranking_score"] * (0.75 + 0.5 * market["score"] / 100)
+        )
+    return assessment
 
 
 def shortlist_with_remedies(skills, profile, schemes, exclude=(), n=3):
@@ -619,6 +684,9 @@ def shortlist_with_remedies(skills, profile, schemes, exclude=(), n=3):
         assess_with_remedies(s, profile, schemes)
         for s in skills if s["id"] not in exclude
     ]
+
+    # The market tilt is already applied by assess_with_remedies, so every
+    # caller gets it — not just this one.
     results.sort(key=lambda r: (r["ranking_score"], r["score"]), reverse=True)
 
     viable = [r for r in results if not r["eliminated"]]
