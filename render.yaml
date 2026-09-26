@@ -1,0 +1,17 @@
+# One-click deploy on Render. Point Render at this repository and it reads
+# this file; the only manual step is pasting the data.gov.in key, which is
+# marked sync:false so it is never committed.
+services:
+  - type: web
+    name: shg-guider-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    # The embedding model needs more than the free tier's 512MB. On `free`,
+    # drop sentence_transformers and torch from requirements-api.txt first —
+    # everything except voice skill-matching works unchanged.
+    plan: starter
+    envVars:
+      - key: DATA_GOV_IN_KEY
+        sync: false

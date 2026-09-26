@@ -62,12 +62,23 @@ def available():
                for m in tags.get("models", []))
 
 
-def _generate(prompt, system=None, temperature=0.2, timeout=TIMEOUT):
+def _generate(prompt, system=None, temperature=0.2, timeout=TIMEOUT, max_tokens=None):
+    """
+    One completion, or None.
+
+    `max_tokens` raises Ollama's output ceiling. The default stopped a JSON
+    reply mid-array — the text ended `...["62099"]}]` with no closing brace —
+    and a truncated answer parses as no answer at all, so the caller silently
+    got nothing back.
+    """
+    options = {"temperature": temperature}
+    if max_tokens:
+        options["num_predict"] = max_tokens
     try:
         response = requests.post(
             f"{HOST}/api/generate", timeout=timeout,
             json={"model": MODEL, "prompt": prompt, "system": system or "",
-                  "stream": False, "options": {"temperature": temperature},
+                  "stream": False, "options": options,
                   # Keep the model resident between the mirror's several small
                   # calls. Without this Ollama can unload it mid-sequence and
                   # each task pays the ~25s load again, turning a 20-second

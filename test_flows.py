@@ -89,13 +89,20 @@ def has_button(at, needle):
 
 
 def answer_visible_choices(at):
-    """Set every segmented_control on screen whose slot we have an answer for."""
+    """
+    Set every segmented_control on screen whose slot we have an answer for.
+
+    Two key shapes: `..choice_<slot>` for a question on its own, and
+    `..grid_<slot>` for a row of the raw-material grid, which puts ten slots on
+    a single screen.
+    """
     count = 0
     for control in list(at.segmented_control):
         key = control.key or ""
-        if "choice_" not in key:
+        marker = "choice_" if "choice_" in key else ("grid_" if "grid_" in key else None)
+        if not marker:
             continue
-        slot = key.split("choice_", 1)[1]
+        slot = key.split(marker, 1)[1]
         if slot in ANSWERS:
             control.set_value(ANSWERS[slot]).run()
             count += 1
@@ -103,7 +110,14 @@ def answer_visible_choices(at):
 
 
 def slots_on_screen(at):
-    return [c.key.split("choice_", 1)[1] for c in at.segmented_control if c.key and "choice_" in c.key]
+    out = []
+    for c in at.segmented_control:
+        key = c.key or ""
+        for marker in ("choice_", "grid_"):
+            if marker in key:
+                out.append(key.split(marker, 1)[1])
+                break
+    return out
 
 
 def stub_mic(answer_by_widget_key):
@@ -167,6 +181,20 @@ def test_data_integrity():
     # asking to buy, her PIN code). She is answering these by voice with low
     # confidence, so the number is a real cost and worth an argument before it
     # rises again.
+    # A requirement whose minimum is the first value on its scale is met by
+    # every possible answer. That is not a requirement — and it is not harmless
+    # either, because it contributes weight that is always earned and drags the
+    # score toward 100. Eleven of these were found by measurement and removed;
+    # this stops them coming back.
+    from data.questions import SLOT_SCALES as _SCALES
+    unfailable = [
+        f"{skill['id']}.{slot}"
+        for skill in SKILLS
+        for slot, rule in skill["requirements"].items()
+        if _SCALES.get(slot) and rule["min"] == _SCALES[slot][0]
+    ]
+    assert not unfailable, f"requirements that can never fail: {unfailable}"
+
     for skill in SKILLS:
         asked = len(set(UNIVERSAL_SLOTS) | set(skill["requirements"])) + len(BESPOKE_QUESTIONS.get(skill["id"], []))
         assert 10 <= asked <= 20, f"{skill['id']} would ask {asked} questions"
@@ -376,17 +404,29 @@ def test_market_layer():
     got = local_competition("854311", "dairy")
     if got:   # skipped when no API key is configured
         assert got["count"] > 0 and got["scanned"] > 1000, got
-        crowded = assess_market(by_id["dairy"], {**same, "state": "Bihar",
+        reading = assess_market(by_id["dairy"], {**same, "state": "Bihar",
                                                  "district_area": "Araria", "pincode": "854311"})
-        blind = assess_market(by_id["dairy"], {**same, "state": "Bihar", "district_area": "Araria"})
-        assert crowded["score"] < blind["score"], (
-            f"53 registered dairy businesses in her pincode should lower the "
-            f"reading, not raise it: {crowded['score']} vs {blind['score']}")
-        counted = next(f for f in crowded["factors"] if f["key"] == "registry_competition")
+        counted = next(f for f in reading["factors"] if f["key"] == "registry_competition")
         assert str(got["count"]) in counted["english"], "the count must be named, not just scored"
         assert "854311" in counted["english"], "the message should name her own PIN code"
-        print(f"  pincode 854311: {got['count']} registered dairy businesses of "
-              f"{got['scanned']:,}, and the reading drops {blind['score']}->{crowded['score']}")
+
+        # This assertion used to read "53 businesses must lower the score",
+        # which was the raw-count thinking the baseline replaced: 53 of 4,409
+        # is 1.20% against a normal 1.49% for dairy, so Araria is an ordinary
+        # dairy area and the count is reassuring rather than alarming. What
+        # must still lower the score is a count genuinely above the norm.
+        crowded = assess_market(by_id["weaving"], {
+            **same, "state": "Uttar Pradesh", "district_area": "Varanasi",
+            "district_confirmed": "Varanasi", "pincode": "221001"})
+        blind = assess_market(by_id["weaving"], {
+            **same, "state": "Uttar Pradesh", "district_area": "Varanasi",
+            "district_confirmed": "Varanasi"})
+        if any(f["key"] == "registry_competition" for f in crowded["factors"]):
+            assert crowded["score"] < blind["score"], (
+                f"Varanasi is saturated with weaving and that must lower the "
+                f"reading: {crowded['score']} vs {blind['score']}")
+        print(f"  pincode 854311: {got['count']} dairy of {got['scanned']:,} reads as "
+              f"ordinary; Varanasi weaving reads as crowded ({blind['score']}->{crowded['score']})")
 
     # The market must reach the *final* recommendation order, not only the
     # shortlist. The tilt used to live in shortlist_with_remedies(), so the
@@ -484,6 +524,65 @@ def test_mandi_prices():
         assert not stale, f"{stale} of {shown} prices shown are older than a year"
         covered = sum(len(v) for v in MANDI_PRICES.values())
         print(f"  archive covers {covered} districts; {shown} prices shown, none stale")
+
+
+# ========================================================= local trade reading
+def test_local_trade_reading():
+    """
+    A small count is ambiguous and must not be read as encouragement.
+
+    The engine used to say "16 registered businesses out of 6,000 — only a
+    handful, so there is room". That does not follow: sixteen can mean nobody
+    has taken the opening, or that sixteen is all the place supports and the
+    rest gave up. The count is now compared with what the trade normally has,
+    and where it is unusually low the message says plainly that this cuts both
+    ways.
+    """
+    from logic.market import assess_market, trade_baseline, MIN_MEANINGFUL_BASELINE
+    try:
+        from data.trade_baseline import TRADE_BASELINE
+    except ImportError:
+        print("  no baseline generated — skipped")
+        return
+    by_id = {s["id"]: s for s in SKILLS}
+
+    varanasi = {"state": "Uttar Pradesh", "district_area": "Varanasi",
+                "district_confirmed": "Varanasi", "pincode": "221001",
+                "stage": "started", "local_competition": "a_few", "buyer_pull": "sometimes"}
+
+    def reading(skill_id):
+        market = assess_market(by_id[skill_id], varanasi)
+        return next((f for f in market["factors"]
+                     if f["key"] == "registry_competition"), None)
+
+    # Varanasi is the silk weaving capital: the measure has to see that, not
+    # merely report a big number.
+    weaving = reading("weaving")
+    if weaving:
+        assert "crowded" in weaving["english"].lower(), weaving["english"]
+
+    # ...and dairy there runs well under the usual rate, which is the case the
+    # old wording got backwards.
+    dairy = reading("dairy")
+    if dairy:
+        assert "below the usual" in dairy["english"], dairy["english"]
+        assert "so there is room" not in dairy["english"], \
+            "a count below the usual rate must not be sold as an opening"
+
+    # A trade that is rare everywhere has no yardstick, so nothing is concluded.
+    assert trade_baseline("agarbatti") is None or \
+        TRADE_BASELINE["agarbatti"]["typical_share"] >= MIN_MEANINGFUL_BASELINE
+    rare = reading("agarbatti")
+    if rare and trade_baseline("agarbatti") is None:
+        assert "does not tell us much" in rare["english"], rare["english"]
+
+    # No baseline may be zero — it would be a denominator of nothing.
+    for skill_id, row in TRADE_BASELINE.items():
+        share = row["typical_share"]
+        assert share >= 0, row
+        assert trade_baseline(skill_id) is None or share >= MIN_MEANINGFUL_BASELINE
+    print(f"  {len(TRADE_BASELINE)} trade baselines; weaving reads crowded in Varanasi "
+          f"and dairy reads below-usual, not 'room'")
 
 
 # ================================================================ SHG density
@@ -838,36 +937,55 @@ def test_scenario_1_and_question_persistence():
 
     click(at, "Look at better options")
     assert at.session_state["step"] == "bridging_questions"
+    bridging = slots_on_screen(at)
     answer_visible_choices(at)
     click(at, "Go ahead")
-    assert at.session_state["step"] == "validate_alternatives"
 
     queue = at.session_state["profile"]["validation_queue"]
-    print(f"  shortlisted: {queue}")
+    print(f"  bridging asked {len(bridging)}, shortlisted: {queue}")
 
     # --- question persistence: answering must not hide questions or advance ---
-    before = slots_on_screen(at)
-    assert before, "expected questions in the first validation round"
-    for slot in before:
-        at.segmented_control(key=f"val0_choice_{slot}").set_value(ANSWERS[slot]).run(timeout=T)
-        assert slots_on_screen(at) == before, (
-            f"answering {slot!r} changed the question list — it used to vanish"
-        )
-        assert at.session_state["profile"]["validation_index"] == 0, \
-            "answering the last question used to auto-skip to the next skill"
-    print(f"  all {len(before)} questions stayed visible while answering, no auto-advance")
+    # The raw-material grid answers every alternative's material question up
+    # front, so the validation rounds are usually empty now and the flow goes
+    # straight to the result. When a round does have questions, the old bug
+    # must still be guarded: answering one used to make the others vanish.
+    if at.session_state["step"] == "validate_alternatives":
+        before = slots_on_screen(at)
+        for slot in before:
+            at.segmented_control(key=f"val0_choice_{slot}").set_value(ANSWERS[slot]).run(timeout=T)
+            assert slots_on_screen(at) == before, (
+                f"answering {slot!r} changed the question list — it used to vanish"
+            )
+            assert at.session_state["profile"]["validation_index"] == 0, \
+                "answering the last question used to auto-skip to the next skill"
+        print(f"  validation round kept its {len(before)} questions visible")
 
-    rounds = 0
-    while at.session_state["step"] == "validate_alternatives":
-        answer_visible_choices(at)
-        if not click(at, "Go ahead", must=False):
-            break
-        rounds += 1
-        assert rounds <= 5, "validation loop did not terminate"
+        rounds = 0
+        while at.session_state["step"] == "validate_alternatives":
+            answer_visible_choices(at)
+            if not click(at, "Go ahead", must=False):
+                break
+            rounds += 1
+            assert rounds <= 5, "validation loop did not terminate"
+    else:
+        print("  validation rounds skipped — the grid already answered them")
 
     assert at.session_state["step"] == "alternatives_result"
     click(at, "See roadmap")
-    assert at.session_state["step"] == "roadmap_result"
+
+    # The trade's own deep questions are deferred to whichever she picks, so
+    # they are asked here rather than three times over during shortlisting.
+    if at.session_state["step"] == "final_questions":
+        deep = slots_on_screen(at)
+        assert deep, "the final screen appeared with nothing to ask"
+        for slot in deep:
+            at.segmented_control(key=f"final_choice_{slot}").set_value(ANSWERS[slot]).run(timeout=T)
+            assert slots_on_screen(at) == deep, \
+                f"answering {slot!r} made the other final questions vanish"
+        click(at, "Go ahead")
+        print(f"  {len(deep)} deep questions asked once, for the skill she chose")
+
+    assert at.session_state["step"] == "roadmap_result", at.session_state["step"]
     assert not at.exception, at.exception
 
     # every path must offer a concrete first step, not just the LLM one
@@ -959,7 +1077,13 @@ def test_scenario_2_discovery(fake_reading=None, variant=""):
 
     assert at.session_state["step"] == "alternatives_result"
     click(at, "See roadmap")
-    assert at.session_state["step"] == "roadmap_result"
+
+    # Same deferral as scenario 1: the chosen trade's own questions are asked
+    # once here rather than for every candidate during shortlisting.
+    if at.session_state["step"] == "final_questions":
+        answer_visible_choices(at)
+        click(at, "Go ahead")
+    assert at.session_state["step"] == "roadmap_result", at.session_state["step"]
 
     at.segmented_control(key="confidence_after_choice").set_value("yes").run(timeout=T)
     profile = at.session_state["profile"]
@@ -1135,6 +1259,9 @@ if __name__ == "__main__":
 
     print("\nmandi prices")
     test_mandi_prices()
+
+    print("\nlocal trade reading")
+    test_local_trade_reading()
 
     print("\nSHG density")
     test_shg_layer()

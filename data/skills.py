@@ -16,6 +16,22 @@ supports three more people" becomes helpers_available: three_plus, and so on.
 
 from data.questions import CRITICAL, MODERATE, LOW
 
+# A note on requirement minimums, learned by measuring rather than by reading:
+# a `min` that sits at the bottom of its slot's scale is met by every possible
+# answer, which makes it not a requirement at all. Worse than useless, in fact —
+# it contributes weight that is always earned, so it drags every score toward
+# 100 and flattens the differences between skills.
+#
+# Eleven such entries were removed: capital for handcraft, pickle, weaving,
+# mushroom and soap (the research puts all five inside the lowest bucket —
+# mushroom starts at Rs 10,000 and soap at Rs 14,000, so there is no floor to
+# clear); market distance for pickle, weaving, beekeeping and soap (all keep
+# for months, so a far market delays income rather than preventing it); and
+# daily hours for beekeeping and soap (hives need periodic rather than daily
+# attention, and soap is batch work).
+#
+# If you add a requirement, check its min is not the first value in the scale.
+# test_flows.py enforces this.
 SKILLS = [
     {
         "id": "handcraft",
@@ -38,7 +54,6 @@ SKILLS = [
             "craft_materials": {"min": "some", "weight": CRITICAL},
             "market_distance": {"min": "moderate", "weight": MODERATE},
             "daily_hours": {"min": "2_to_4", "weight": MODERATE},
-            "capital_available": {"min": "under_25k", "weight": LOW},
             "covered_space": {"min": "small_corner", "weight": LOW},
         },
     },
@@ -62,9 +77,7 @@ SKILLS = [
 "requirements": {
             "seasonal_produce": {"min": "some", "weight": CRITICAL},
             "covered_space": {"min": "small_corner", "weight": MODERATE},
-            "capital_available": {"min": "under_25k", "weight": LOW},
             "daily_hours": {"min": "2_to_4", "weight": LOW},
-            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -147,8 +160,6 @@ SKILLS = [
             "helpers_available": {"min": "three_plus", "weight": MODERATE},
             "covered_space": {"min": "one_room", "weight": MODERATE},
             "daily_hours": {"min": "4_to_8", "weight": MODERATE},
-            "capital_available": {"min": "under_25k", "weight": LOW},
-            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -173,8 +184,6 @@ SKILLS = [
             "water_access": {"min": "yes", "weight": CRITICAL},
             "training_access": {"min": "yes", "weight": MODERATE},
             "capital_available": {"min": "25k_75k", "weight": MODERATE},
-            "daily_hours": {"min": "under_2", "weight": LOW},
-            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {
@@ -227,7 +236,6 @@ SKILLS = [
             "covered_space": {"min": "one_room", "weight": CRITICAL},
             "market_distance": {"min": "moderate", "weight": MODERATE},
             "water_access": {"min": "seasonal", "weight": MODERATE},
-            "capital_available": {"min": "under_25k", "weight": LOW},
             "electricity_reliability": {"min": "few_hours", "weight": LOW},
             "training_access": {"min": "yes", "weight": LOW},
             "daily_hours": {"min": "2_to_4", "weight": LOW},
@@ -253,10 +261,7 @@ SKILLS = [
 "requirements": {
             "cooking_oils": {"min": "some", "weight": CRITICAL},
             "covered_space": {"min": "small_corner", "weight": MODERATE},
-            "capital_available": {"min": "under_25k", "weight": LOW},
             "electricity_reliability": {"min": "few_hours", "weight": LOW},
-            "daily_hours": {"min": "under_2", "weight": LOW},
-            "market_distance": {"min": "far", "weight": LOW},
         },
     },
     {

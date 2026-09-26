@@ -14,3 +14,4 @@ venv/
 .DS_Store
 data/pincode_cache/
 data/mandi_cache/
+data/discovery_cache/

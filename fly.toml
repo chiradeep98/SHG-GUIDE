@@ -1,0 +1,25 @@
+# Fly.io alternative. Deploy with:  fly launch --no-deploy && fly deploy
+# then:  fly secrets set DATA_GOV_IN_KEY=...
+app = "shg-guider-api"
+primary_region = "bom"          # Mumbai — closest to the users
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = "2gb"                # the embedding model does not fit in 512mb
+  cpu_kind = "shared"
+  cpus = 1
+
+[http_service.checks]
+  [http_service.checks.health]
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"

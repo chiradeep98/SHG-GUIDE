@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHG Guider</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Tiro+Devanagari+Hindi:ital@0;1&family=Karla:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#1A1A1F; --ink-soft:#55555F; --ink-faint:#83838F;
+  --paper:#FBF9F4; --card:#FFFFFF; --line:#E3DFD5;
+  --indigo:#2E3A8C; --indigo-soft:#E8EAF6; --ochre:#B8791C; --ochre-soft:#FBF0DC;
+  --good:#2F6B4F; --good-soft:#E4F0E9; --bad:#A33A2E; --bad-soft:#FAE8E5;
+  --radius:14px; --shadow:0 1px 3px rgba(26,26,31,.07),0 6px 20px rgba(26,26,31,.05);
+}
+:root:not([data-theme="light"]) { }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ink:#F2F0EA; --ink-soft:#B6B3AC; --ink-faint:#85837D;
+    --paper:#15151A; --card:#1E1E25; --line:#32323C;
+    --indigo:#A3B0F0; --indigo-soft:#252C52; --ochre:#E0A94D; --ochre-soft:#3A2D14;
+    --good:#7FC9A2; --good-soft:#1C3229; --bad:#E89184; --bad-soft:#3A211D;
+    --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 20px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#F2F0EA; --ink-soft:#B6B3AC; --ink-faint:#85837D;
+  --paper:#15151A; --card:#1E1E25; --line:#32323C;
+  --indigo:#A3B0F0; --indigo-soft:#252C52; --ochre:#E0A94D; --ochre-soft:#3A2D14;
+  --good:#7FC9A2; --good-soft:#1C3229; --bad:#E89184; --bad-soft:#3A211D;
+  --shadow:0 1px 3px rgba(0,0,0,.4),0 6px 20px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:Karla,system-ui,sans-serif;font-size:16.5px;line-height:1.6;
+  -webkit-font-smoothing:antialiased}
+.hi{font-family:"Tiro Devanagari Hindi",serif;line-height:1.85}
+.wrap{max-width:720px;margin:0 auto;padding:28px 16px 80px}
+header{border-bottom:1px solid var(--line);margin-bottom:26px;padding-bottom:16px}
+h1{font-size:1.45rem;margin:0;letter-spacing:-.01em}
+h1 span{color:var(--indigo)}
+.sub{color:var(--ink-soft);font-size:.9rem;margin-top:4px}
+h2{font-size:1.15rem;margin:0 0 4px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}
+label.q{display:block;margin-bottom:8px}
+.q .hi{font-size:1.05rem;display:block}
+.q .en{color:var(--ink-soft);font-size:.86rem;display:block}
+.opts{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 4px}
+.opt{border:1.5px solid var(--line);background:transparent;color:var(--ink);
+  border-radius:999px;padding:9px 16px;cursor:pointer;font:inherit;font-size:.93rem;
+  transition:.12s}
+.opt:hover{border-color:var(--indigo)}
+.opt[aria-pressed="true"]{background:var(--indigo);border-color:var(--indigo);color:#fff}
+@media (max-width:480px){
+  .opts{flex-direction:column;align-items:stretch}
+  .opt{text-align:left}
+}
+button.go{background:var(--indigo);color:#fff;border:0;border-radius:10px;
+  padding:13px 26px;font:inherit;font-weight:700;cursor:pointer;font-size:1rem}
+button.go:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:transparent;border:1.5px solid var(--line);color:var(--ink-soft);
+  border-radius:10px;padding:11px 20px;font:inherit;cursor:pointer}
+input,select{width:100%;padding:11px 13px;border:1.5px solid var(--line);border-radius:10px;
+  background:var(--card);color:var(--ink);font:inherit}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.mic{background:var(--ochre-soft);border:1.5px solid var(--ochre);color:var(--ochre);
+  border-radius:999px;padding:11px 20px;font:inherit;font-weight:700;cursor:pointer}
+.mic.live{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+.score{display:flex;align-items:baseline;gap:10px}
+.score b{font-size:3rem;line-height:1;letter-spacing:-.03em}
+.bar{height:9px;background:var(--line);border-radius:99px;overflow:hidden;margin:12px 0 4px}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--indigo)}
+.pill{display:inline-block;border-radius:999px;padding:3px 11px;font-size:.78rem;
+  font-weight:700;letter-spacing:.02em}
+.pill.ok{background:var(--good-soft);color:var(--good)}
+.pill.no{background:var(--bad-soft);color:var(--bad)}
+.pill.mid{background:var(--ochre-soft);color:var(--ochre)}
+.gap{border-left:3px solid var(--line);padding:2px 0 2px 14px;margin:14px 0}
+.gap.unmet{border-color:var(--bad)} .gap.partial{border-color:var(--ochre)}
+.gap.met{border-color:var(--good)}
+.gap h4{margin:0 0 2px;font-size:.98rem}
+.gap p{margin:4px 0;color:var(--ink-soft);font-size:.9rem}
+a.scheme{display:inline-block;margin-top:6px;color:var(--indigo);font-weight:700;
+  font-size:.88rem;text-decoration:none;border-bottom:1.5px solid currentColor}
+.muted{color:var(--ink-faint);font-size:.84rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card)}
+.stat b{display:block;font-size:1.5rem;line-height:1.2}
+.stat span{color:var(--ink-soft);font-size:.8rem}
+.err{background:var(--bad-soft);color:var(--bad);border-radius:10px;padding:12px 14px;
+  margin-bottom:14px;font-size:.9rem}
+.setup{background:var(--ochre-soft);border:1px solid var(--ochre);border-radius:12px;
+  padding:16px;margin-bottom:18px}
+.setup input{margin:8px 0}
+.crumbs{color:var(--ink-faint);font-size:.8rem;letter-spacing:.06em;
+  text-transform:uppercase;margin-bottom:6px}
+.spin{display:inline-block;width:15px;height:15px;border:2px solid var(--line);
+  border-top-color:var(--indigo);border-radius:50%;animation:s .7s linear infinite;
+  vertical-align:-2px}
+@keyframes s{to{transform:rotate(360deg)}}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--ink-faint);font-size:.8rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>SHG <span>Guider</span></h1>
+    <div class="sub hi">अपने हुनर से कमाई तक का रास्ता</div>
+  </header>
+  <div id="app"><p><span class="spin"></span> जुड़ रहे हैं…</p></div>
+  <footer>
+    Scores, remedies and market readings are computed by the Python engine on the
+    server — this page only asks and displays.
+    <span id="conn"></span>
+  </footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -13,7 +13,8 @@ from data.states import STATES
 from data.schemes import SCHEMES
 from data.channels import CHANNELS
 from data.questions import (
-    BESPOKE_QUESTIONS, UNIVERSAL_SLOTS, question_for, short_label_hi_for,
+    BESPOKE_QUESTIONS, GROUPS, RAW_MATERIAL_SLOTS, UNIVERSAL_SLOTS, question_for,
+    short_label_for, short_label_hi_for,
 )
 from data.day_questions import CONFIDENCE_CHECK, DAY_PROMPTS, THIS_OR_THAT
 from logic.skill_matching import match_skill_combined, match_skill_multi
@@ -319,6 +320,43 @@ def _voice_question_block(hindi_prompt, filename, key, english_prompt=None):
     return None, None
 
 
+def _render_group(group_key, profile, key_prefix):
+    """
+    Several slots that belong on one screen, a row each.
+
+    Asked as one question because they are one question about ten things. Every
+    row is answered here, which also means no later round has to ask about raw
+    material again — the alternatives she is shown are validated against answers
+    she has already given.
+    """
+    group = GROUPS[group_key]
+    ready = True
+    with st.container(border=True):
+        bilingual(group["hindi_prompt"], group["label_en"])
+        hindi_prompt_button(group["hindi_prompt"], f"prompt_{group_key}.mp3")
+        st.caption(group["help_hi"])
+        st.caption(group["help_en"])
+
+        for slot in group["slots"]:
+            q = question_for(slot)
+            options = {o["value"]: o["label_hi"] for o in q["options"]}
+            row = st.container(horizontal=True, vertical_alignment="center")
+            with row:
+                st.markdown(f"**{short_label_hi_for(slot)}**  \n{short_label_for(slot)}")
+                choice = st.segmented_control(
+                    q["label_en"],
+                    options=list(options),
+                    format_func=lambda v, labels=options: labels[v],
+                    key=f"{key_prefix}grid_{slot}",
+                    label_visibility="collapsed",
+                )
+            if choice:
+                profile[slot] = choice
+            elif profile.get(slot) is None:
+                ready = False
+    return ready
+
+
 def render_questions(keys, skill_id=None, key_prefix=""):
     """
     Renders any list of question keys (shared slots or a skill's bespoke
@@ -333,6 +371,11 @@ def render_questions(keys, skill_id=None, key_prefix=""):
     answered = True
 
     for key in keys:
+        if key in GROUPS:
+            if not _render_group(key, profile, key_prefix):
+                answered = False
+            continue
+
         q = question_for(key, skill_id)
         if q is None:
             continue
@@ -457,15 +500,43 @@ def continue_button(ready, label="आगे बढ़ें Go ahead"):
 DISTRICT_HANDLED_SEPARATELY = {"district_area"}
 
 
+def pending_bespoke(skill_id, profile):
+    """This trade's own deep questions that have not been answered yet."""
+    return [q["id"] for q in BESPOKE_QUESTIONS.get(skill_id, [])
+            if profile.get(q["id"]) is None]
+
+
+def _after_picking(skill_id, profile):
+    """
+    Where she goes once she has chosen: the trade's own deep questions if any
+    are still unanswered, otherwise straight to the roadmap.
+
+    Those questions were skipped while shortlisting — asking all three
+    alternatives about looms, spawn suppliers and FSSAI licences is a dozen
+    questions spent mostly on trades she will not pick. They matter for the one
+    she does pick, so they are asked here, where the answer is worth having.
+    """
+    return "final_questions" if pending_bespoke(skill_id, profile) else "roadmap_result"
+
+
 def questions_for_skill(skill_id):
-    """Universal slots + this skill's own requirement slots + its bespoke questions."""
+    """
+    Universal slots + this skill's own requirement slots + its bespoke questions,
+    with every raw-material question folded into one grid.
+
+    The grid answers all ten raw materials at once rather than only this skill's,
+    which costs nothing here — they are rows on a screen she is already on — and
+    saves the bridging round and the alternative validations from asking about
+    raw material at all.
+    """
     skill = SKILLS_BY_ID[skill_id]
-    own_slots = [s for s in skill["requirements"] if s not in UNIVERSAL_SLOTS]
+    own_slots = [s for s in skill["requirements"]
+                 if s not in UNIVERSAL_SLOTS and s not in RAW_MATERIAL_SLOTS]
     # A skill's bespoke questions are also listed in its requirements (that is
     # what makes them scored), so filter them out here or each would render
     # twice and collide on its widget key.
     bespoke = [q["id"] for q in BESPOKE_QUESTIONS.get(skill_id, []) if q["id"] not in own_slots]
-    keys = UNIVERSAL_SLOTS + own_slots + bespoke
+    keys = UNIVERSAL_SLOTS + ["raw_materials"] + own_slots + bespoke
     return [k for k in keys if k not in DISTRICT_HANDLED_SEPARATELY]
 
 
@@ -1035,6 +1106,14 @@ elif st.session_state.step == "validate_alternatives":
         # and skip her to the next skill without pressing Continue.
         round_key = f"validation_slots_{index}"
         if round_key not in profile:
+            # Every requirement, skill-specific ones included. Deferring those
+            # to whichever trade she picked saved about seven questions and was
+            # measured to cost far too much for it: the score shown for a
+            # shortlisted trade ran +9 points high on average, was within five
+            # points only half the time, and the order of the three changed
+            # once the questions were answered in 78% of trials. A shortlist
+            # she chooses from has to be scored on the same evidence as the
+            # verdict she is given afterwards.
             profile[round_key] = slots_needed_for(skill, profile)
         needed = profile[round_key]
 
@@ -1137,7 +1216,7 @@ elif st.session_state.step == "alternatives_result":
             ):
                 profile["final_skill_id"] = r["skill_id"]
                 profile["final_assessment"] = r
-                st.session_state.step = "roadmap_result"
+                st.session_state.step = _after_picking(r["skill_id"], profile)
                 st.rerun()
 
     if ruled_out:
@@ -1163,8 +1242,41 @@ elif st.session_state.step == "alternatives_result":
             if st.button(f"{own['name']} के साथ ही रहें / Stick with it", icon=":material/check:", key="stick_own"):
                 profile["final_skill_id"] = own_skill_id
                 profile["final_assessment"] = profile["own_assessment"]
-                st.session_state.step = "roadmap_result"
+                st.session_state.step = _after_picking(own_skill_id, profile)
                 st.rerun()
+
+# ------------------------------------------------------------ final_questions
+# The last few questions, about the trade she actually chose. Deferred from the
+# shortlist on purpose: they are specific enough to be worth asking once, and
+# not worth asking three times over for trades she was never going to pick.
+elif st.session_state.step == "final_questions":
+    profile = st.session_state.profile
+    skill = SKILLS_BY_ID[profile["final_skill_id"]]
+
+    # Worked out once and kept. Recomputing "what is still unanswered" on every
+    # rerun makes each question disappear the moment she answers it, so the
+    # screen empties itself under her as she works down it — the same bug the
+    # validation rounds had.
+    if "final_question_slots" not in profile:
+        profile["final_question_slots"] = pending_bespoke(skill["id"], profile)
+    pending = profile["final_question_slots"]
+
+    if not pending:
+        profile.pop("final_question_slots", None)
+        st.session_state.step = "roadmap_result"
+        st.rerun()
+
+    st.subheader(f"{skill['name']} — आख़िरी कुछ सवाल / A few last questions")
+    st.caption("These are specific to the work you picked, so the roadmap fits it properly.")
+
+    ready = render_questions(pending, skill_id=skill["id"], key_prefix="final_")
+
+    if continue_button(ready):
+        profile.pop("final_question_slots", None)
+        profile["final_assessment"] = assess_with_remedies(skill, profile, SCHEMES)
+        st.session_state.step = "roadmap_result"
+        st.rerun()
+
 
 # --------------------------------------------------------- confidence_before
 # Asked before anything else, and again at the end, so the confidence claim
@@ -1344,7 +1456,9 @@ elif st.session_state.step == "universal_slots":
     st.caption("These apply whichever work turns out to suit you best.")
 
     ready = render_questions(
-        [k for k in UNIVERSAL_SLOTS if k not in DISTRICT_HANDLED_SEPARATELY], key_prefix="univ_"
+        [k for k in UNIVERSAL_SLOTS if k not in DISTRICT_HANDLED_SEPARATELY]
+        + ["raw_materials"],
+        key_prefix="univ_",
     )
     ready = confirm_district() and ready
 

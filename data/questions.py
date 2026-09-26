@@ -552,6 +552,35 @@ SHORT_LABELS = {
 }
 
 
+# --- question groups: several slots that belong on one screen.
+#
+# Ten separate screens asking "is bamboo available? is yarn available? is milk
+# available?" is ten voice prompts and ten waits for a woman who is answering by
+# speaking. They are the same question about ten things, so they are asked as
+# one screen with a row each.
+#
+# The three-level scale is kept. It does not change whether a requirement is
+# met — every raw-material minimum is "some", so "plenty" and "some" both pass —
+# but the roadmap reads it: a woman with plenty of milk is told something
+# different from one with barely enough.
+GROUPS = {
+    "raw_materials": {
+        "hindi_prompt": "इनमें से आपको क्या आसानी से मिल जाता है?",
+        "label_en": "Which of these can you get easily?",
+        "help_hi": "जो आसानी से मिलता है उसे 'हाँ, बहुत' चुनें, थोड़ा मिलता है तो 'थोड़ा'।",
+        "help_en": "One row each — pick how easily you can get it. This saves us "
+                   "asking about them one at a time later.",
+        "slots": [
+            "livestock_milk", "livestock_birds", "farm_waste", "flowering_land",
+            "bamboo_access", "cloth_market", "yarn_weavers", "seasonal_produce",
+            "craft_materials", "cooking_oils",
+        ],
+    },
+}
+
+RAW_MATERIAL_SLOTS = set(GROUPS["raw_materials"]["slots"])
+
+
 def question_for(key, skill_id=None):
     """
     The question definition for a slot: shared slots first, then this

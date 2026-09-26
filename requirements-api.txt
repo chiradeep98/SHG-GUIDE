@@ -1,0 +1,15 @@
+# The API's dependencies. Separate from requirements.txt so the Streamlit app's
+# install is unchanged and the server does not carry streamlit, the microphone
+# recorder or gTTS, none of which it uses.
+fastapi
+uvicorn[standard]
+requests
+deep-translator
+pydantic
+
+# The skill matcher's model. This is the heavy one — torch plus the
+# all-MiniLM weights is roughly 800MB installed, which needs a 1GB-plus
+# instance. Comment both lines out to deploy small: /api/match then falls back
+# to keyword matching and says so in its response, and nothing else changes.
+sentence_transformers
+torch

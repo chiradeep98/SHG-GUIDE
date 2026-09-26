@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+audio/
+results/
+scripts/
+app.py
+test_flows.py
+.streamlit/
+*.pdf

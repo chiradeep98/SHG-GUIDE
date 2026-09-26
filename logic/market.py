@@ -53,7 +53,33 @@ from data.market import (
 )
 from data.questions import SLOT_SCALES, short_label_for
 from data.regions import regional_competition
-from logic.local_market import local_competition
+from logic.local_market import local_competition, recent_openings
+
+try:
+    from data.trade_baseline import TRADE_BASELINE
+except ImportError:  # the generated table is optional
+    TRADE_BASELINE = {}
+
+
+# Below this, the trade is so rare everywhere that a share cannot be compared
+# to it. Agarbatti's median across 47 sampled pincodes is 0.00% — most places
+# have none at all — so "you have fewer than usual" is not a statement that can
+# be made, and dividing by it would be arithmetic on noise.
+MIN_MEANINGFUL_BASELINE = 0.05
+
+
+def trade_baseline(skill_id):
+    """
+    The share of enterprises this trade normally has, or None when there is no
+    usable figure — either the trade was never sampled, or it is so rare that
+    the median is effectively zero.
+    """
+    row = TRADE_BASELINE.get(skill_id)
+    typical = (row or {}).get("typical_share")
+    if not typical or typical < MIN_MEANINGFUL_BASELINE:
+        return None
+    return typical
+
 
 try:
     from data.market_density import ENTERPRISE_COUNTS
@@ -203,33 +229,76 @@ def assess_market(skill, profile):
     # carries the most weight of anything in this function.
     measured = local_competition(profile.get("pincode"), skill["id"])
     if measured and measured["scanned"]:
-        share = measured["share"]
-        # Scored on share rather than raw count: a pincode with 4,400
-        # enterprises and one with 1,100 cannot be compared on counts alone.
-        position = (1.0 if share == 0 else
-                    0.75 if share < 0.002 else
-                    0.5 if share < 0.005 else
-                    0.25 if share < 0.01 else 0.0)
+        share = 100 * measured["share"]
+        typical = trade_baseline(skill["id"])
+        n, pin, scanned = measured["count"], measured["pincode"], measured["scanned"]
+        opened = recent_openings(profile.get("pincode"), skill["id"])
+        new_this_year = (opened or {}).get("recent", 0)
+
+        # Compared against what this trade normally is, not against zero.
+        #
+        # A small count on its own says nothing. Sixteen dairy businesses in
+        # 6,000 reads as an empty field with room in it, and reads exactly the
+        # same when sixteen is all the place will support. What separates those
+        # is whether her pincode has fewer than the trade usually has: dairy
+        # sits near 0.65% of enterprises in an ordinary pincode, so Varanasi's
+        # 0.27% is under half the normal rate — a warning, not an opening.
+        ratio = (share / typical) if typical else None
+
+        if ratio is None:
+            # No usable yardstick for this trade — it is rare more or less
+            # everywhere, so the count is reported and nothing is concluded
+            # from it either way.
+            position = 0.5
+            note = (f"आपके पिन कोड {pin} में इस काम के {n} दर्ज कारोबार हैं "
+                    f"({scanned:,} में से)। यह काम हर जगह ही कम है, इसलिए इस गिनती से "
+                    f"कोई नतीजा निकालना ठीक नहीं।",
+                    f"Your PIN code {pin} has {n} registered businesses in this trade out "
+                    f"of {scanned:,}. This trade is uncommon almost everywhere, so that "
+                    f"number does not tell us much either way.")
+        elif ratio >= 2.0:
+            position = 0.0
+            note = (f"आपके पिन कोड {pin} में इस काम के {n} कारोबार हैं — आम तौर पर "
+                    f"जितने होते हैं उससे कहीं ज़्यादा। यहाँ यह काम भरा हुआ है।",
+                    f"Your PIN code {pin} has {n} businesses in this trade, well above "
+                    f"what a place this size usually has. It is crowded here.")
+        elif ratio >= 1.2:
+            position = 0.25
+            note = (f"आपके पिन कोड {pin} में इस काम के {n} कारोबार हैं — आम से कुछ "
+                    f"ज़्यादा। खरीदार तो हैं, पर मुक़ाबला भी।",
+                    f"Your PIN code {pin} has {n} businesses in this trade, somewhat more "
+                    f"than usual. There are buyers here, but competition too.")
+        elif ratio >= 0.6:
+            position = 0.6
+            note = (f"आपके पिन कोड {pin} में इस काम के {n} कारोबार हैं — जितने आम तौर "
+                    f"पर होते हैं लगभग उतने ही। यह काम यहाँ चलता है।",
+                    f"Your PIN code {pin} has {n} businesses in this trade, about the usual "
+                    f"number for a place this size. The trade works here.")
+        else:
+            # The genuinely ambiguous case, and the one the old wording got
+            # wrong. Momentum is the only thing on hand that distinguishes a
+            # gap from a graveyard: people still starting means the door is
+            # open, nobody starting means it may have been tried and dropped.
+            position = 0.5 if new_this_year else 0.35
+            if new_this_year:
+                note = (f"आपके पिन कोड {pin} में इस काम के सिर्फ़ {n} कारोबार हैं — आम से "
+                        f"काफ़ी कम। पर इसी साल {new_this_year} नए शुरू हुए हैं, तो जगह "
+                        f"खाली लगती है। पहले दो-चार खरीदार पक्के कर लीजिए।",
+                        f"Your PIN code {pin} has only {n} businesses in this trade, well "
+                        f"below the usual number — but {new_this_year} started this year, "
+                        f"so the gap looks real. Line up a few buyers before committing.")
+            else:
+                note = (f"आपके पिन कोड {pin} में इस काम के सिर्फ़ {n} कारोबार हैं और इस साल "
+                        f"कोई नया शुरू नहीं हुआ। कम होना मौका भी हो सकता है और चेतावनी भी — "
+                        f"हो सकता है यहाँ यह काम चलता ही न हो। पहले किसी से पूछिए कि क्यों।",
+                        f"Your PIN code {pin} has only {n} businesses in this trade and none "
+                        f"started this year. Few can mean an opening or a warning — it may "
+                        f"be that this does not sell here. Ask someone locally why.")
+
         # The same rule as everywhere else in this file: neighbours in a
         # differentiated trade are a cluster, not a threat, so a crowded
         # pincode counts for less there.
         weight = 2 if trade["price_pressure"] == "differentiated" else 4
-        n, pin = measured["count"], measured["pincode"]
-        if n == 0:
-            note = (f"सरकारी रिकॉर्ड में आपके पिन कोड {pin} में इस काम का एक भी "
-                    f"दर्ज कारोबार नहीं है — यानी यहाँ यह काम लगभग कोई नहीं कर रहा।",
-                    f"Government records show not a single registered business doing this "
-                    f"in your PIN code {pin} — almost nobody around you is doing this work.")
-        elif position >= 0.5:
-            note = (f"आपके पिन कोड {pin} में इस काम के {n} दर्ज कारोबार हैं "
-                    f"({measured['scanned']:,} में से) — गिने-चुने हैं, जगह खाली है।",
-                    f"Your PIN code {pin} has {n} registered businesses in this trade out of "
-                    f"{measured['scanned']:,} — only a handful, so there is room.")
-        else:
-            note = (f"आपके पिन कोड {pin} में इस काम के {n} दर्ज कारोबार हैं "
-                    f"({measured['scanned']:,} में से) — यहाँ यह काम पहले से भरा हुआ है।",
-                    f"Your PIN code {pin} already has {n} registered businesses in this trade "
-                    f"out of {measured['scanned']:,} — this work is already well covered here.")
         weigh("registry_competition", "आपके पिन कोड में यही काम",
               "Others in your PIN code doing this", position, weight, *note)
 
