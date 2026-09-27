@@ -133,6 +133,14 @@ def _same_place(row, state, district):
             and (row.get("district") or "").strip().lower() == (district or "").strip().lower())
 
 
+# Remembers, for this process, that today's feed could not be fetched. Without
+# it every render of the market tab retried all 25 pages: the feed was empty on
+# one day of testing, the fetch returned None, nothing was written to disk, and
+# each redraw paid three seconds to fail again. The archive fallback covers the
+# gap, so there is no reason to keep asking.
+_FEED_UNAVAILABLE = set()
+
+
 def _todays_feed(key):
     """Every row in today's feed, cached. None if it cannot be fetched."""
     path = _cache_path()
@@ -140,6 +148,8 @@ def _todays_feed(key):
         return json.loads(path.read_text())
     except Exception:
         pass
+    if path.name in _FEED_UNAVAILABLE:
+        return None
 
     rows = []
     for page in range(25):   # the largest day seen needed 19
@@ -150,6 +160,7 @@ def _todays_feed(key):
             batch = response.json().get("records", [])
         except Exception as exc:
             log.info("Mandi feed page %s failed: %s", page, exc)
+            _FEED_UNAVAILABLE.add(path.name)
             return None      # a partial feed would look like missing coverage
         if not batch:
             break
@@ -177,14 +188,16 @@ def prices_for(state, district, skill_id, key=None):
     if not wanted or not state or not district:
         return None
 
-    key = key or api_key()
-    if not key:
-        return None
-    feed = _todays_feed(key)
-    if feed is None:
-        return None
-
     names = {w.lower() for w in wanted}
+
+    # Today's feed first, but its absence must not stop the archive being
+    # tried. This used to return here when the live fetch failed, which killed
+    # the fallback on precisely the days it existed for — the feed was empty
+    # and every district came back with no price at all, though the archive
+    # held a recent one for 177 of them.
+    key = key or api_key()
+    feed = _todays_feed(key) if key else None
+
     hits = [
         {
             "commodity": r.get("commodity"),
@@ -194,7 +207,7 @@ def prices_for(state, district, skill_id, key=None):
             "market": r.get("market"),
             "today": True,
         }
-        for r in feed
+        for r in (feed or [])
         if (r.get("commodity") or "").lower() in names and _same_place(r, state, district)
     ]
     if hits:

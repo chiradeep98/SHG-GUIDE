@@ -476,10 +476,10 @@ def test_mandi_prices():
     if not api_key():
         print("  no data.gov.in key — skipped")
         return
-    feed = _todays_feed(api_key())
-    if feed is None:
-        print("  mandi feed unreachable — skipped")
-        return
+    # A missing live feed is not a reason to skip: the archive is supposed to
+    # carry the day, and the bug this guards against was the archive being
+    # unreachable in precisely that case.
+    feed = _todays_feed(api_key()) or []
 
     # Asking for a district in the wrong state must return nothing, however the
     # API answers. filters[state]="Uttar Pradesh" once returned 29 rows of which
@@ -501,6 +501,21 @@ def test_mandi_prices():
 
     # a trade with no mandi inputs must not claim any
     assert prices_for("Kerala", "Idukki", "tailoring") is None
+
+    # The archive must be reachable when today's feed is not. This returned
+    # early on a failed live fetch, which disabled the fallback on exactly the
+    # days it existed for — the feed came back empty and all 177 archived
+    # districts reported no price at all.
+    import logic.mandi as _m
+    real_feed = _m._todays_feed
+    _m._todays_feed = lambda key: None
+    try:
+        rescued = _m.prices_for("Kerala", "Idukki", "pickle")
+        assert rescued, "the archive is unreachable when the daily feed fails"
+        assert all(not r.get("today") for r in rescued), rescued[0]
+    finally:
+        _m._todays_feed = real_feed
+    print("  archive still answers when the live feed is down")
 
     # The archive fills in where today's feed is silent, which is most districts
     # most days — but only with prices recent enough to mean something. Some

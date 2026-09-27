@@ -41,7 +41,7 @@ from logic.scheme_matching import match_schemes
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="SHG Guider API", version="1.0")
+app = FastAPI(title="Avsar Setu API", version="1.0")
 
 # The HTML frontend may be opened from a file:// page, an Artifact, or served
 # from this same host. A file:// page sends Origin: null, which no origin list

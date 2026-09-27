@@ -1,4 +1,4 @@
-# SHG Guider
+# अवसर सेतु / Avsar Setu
 
 A voice-first Hindi prototype that helps a rural Indian SHG member turn a skill
 into a concrete plan: it works out whether the work she has in mind is viable

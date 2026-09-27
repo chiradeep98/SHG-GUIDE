@@ -36,7 +36,7 @@ from logic.session_log import record_session
 
 log = logging.getLogger(__name__)
 
-st.set_page_config(page_title="SHG Guider")
+st.set_page_config(page_title="Avsar Setu", page_icon=":material/hub:")
 
 SKILLS_BY_ID = {s["id"]: s for s in SKILLS}
 ALTERNATIVES_TO_VALIDATE = 3
@@ -47,7 +47,10 @@ OPTIONAL_FIELDS = {"pincode"}
 st.session_state.setdefault("step", "entry")
 st.session_state.setdefault("profile", {})
 
-st.title("SHG Guider")
+# अवसर सेतु — "opportunity bridge". The Hindi leads because she reads it
+# first; the transliteration follows so it is sayable either way.
+st.title("अवसर सेतु / Avsar Setu")
+st.caption("आपके हुनर से आपकी कमाई तक / From the skill you have to the income you want")
 
 # MyMemory gives an anonymous caller about 1,000 words a day per IP address,
 # which one afternoon of testing exhausts — it then returns its quota warning
